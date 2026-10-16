@@ -23,7 +23,7 @@ import (
 
 // Alert is something worth pushing to a person.
 type Alert struct {
-	Event    string    `json:"event"` // lockup, reboot, ddp, recovered, update, test
+	Event    string    `json:"event"` // lockup, reboot, ddp, recovered, update, test, digest
 	Severity string    `json:"severity"`
 	Board    string    `json:"board"`
 	Host     string    `json:"host"`
@@ -32,6 +32,7 @@ type Alert struct {
 	Incident string    `json:"incident_id,omitempty"`
 	URL      string    `json:"url,omitempty"`
 	Time     time.Time `json:"time"`
+	Held     []Alert   `json:"held,omitempty"` // digest: the alerts held during quiet hours
 }
 
 // AlertEvents are the events a channel can subscribe to.
@@ -124,15 +125,24 @@ type Notifier struct {
 	dashboard string
 	client    *http.Client
 
-	mu   sync.Mutex
-	last map[string]time.Time // board/event -> last sent, to damp flapping
+	quiet   *QuietHours
+	now     func() time.Time
+	recheck time.Duration // how often held alerts check for the end of quiet hours
+
+	mu      sync.Mutex
+	last    map[string]time.Time // board/event -> last sent, to damp flapping
+	held    []Alert              // waiting for quiet hours to end
+	passed  map[string]bool      // incidents whose lockup alert went out during quiet hours
+	timer   *time.Timer
+	stopped bool
 }
 
 const alertCooldown = 2 * time.Minute
 
 func NewNotifier(channels []Channel, dashboardURL string) *Notifier {
 	return &Notifier{channels: channels, dashboard: strings.TrimRight(dashboardURL, "/"),
-		client: &http.Client{Timeout: 10 * time.Second}, last: map[string]time.Time{}}
+		client: &http.Client{Timeout: 10 * time.Second}, last: map[string]time.Time{}, passed: map[string]bool{},
+		now: time.Now, recheck: time.Minute}
 }
 
 func (n *Notifier) Enabled() bool {
@@ -149,7 +159,7 @@ func (n *Notifier) Enabled() bool {
 
 func (n *Notifier) prepare(a *Alert) {
 	if a.Time.IsZero() {
-		a.Time = time.Now()
+		a.Time = n.now()
 	}
 	if n.dashboard != "" && a.URL == "" {
 		a.URL = n.dashboard + "/"
@@ -172,8 +182,13 @@ func (n *Notifier) Send(a Alert) {
 		return
 	}
 	n.last[key] = time.Now()
-	n.mu.Unlock()
 	n.prepare(&a)
+	if n.holds(a, n.now()) {
+		n.hold(a)
+		n.mu.Unlock()
+		return
+	}
+	n.mu.Unlock()
 	for _, ch := range n.channels {
 		if ch.Enabled && ch.wants(a.Event) {
 			go func() {

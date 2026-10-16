@@ -54,6 +54,8 @@ Set `ddp_probe` on a single board to override the mode for that board.
   - the last DDP check failed;
   - DDP loss over threshold on an active stream;
   - temperature, the RAM low-water mark, an OOM count, or board UI messages.
+- **maintenance** while the board is in maintenance mode (see below), whatever
+  else is going on. The reasons are still listed on its card.
 
 Events are logged when any of these happen:
 
@@ -116,12 +118,56 @@ to the incident.
 Prometheus also gets `baldrick_incidents_unacknowledged{type}` and
 `baldrick_incidents_ongoing{type}`.
 
+### Maintenance mode
+
+Working on a board? Its card's **•••** menu has **Maintenance mode…**: pick
+30 minutes, 2 hours or until you turn it off, and add a note if you like.
+While a board is in maintenance:
+
+- incidents are still detected and recorded, but nobody is notified, and new
+  ones are acknowledged automatically with the note "During maintenance";
+- its card shows **maintenance** (purple) with an **End maintenance** button,
+  and it isn't counted as down or degraded in the header;
+- `GET /api/boards` reports it as `"status": "maintenance"` with a
+  `maintenance` object (`since`, `until`, `note`), and Prometheus gets
+  `baldrick_maintenance{board} 1`.
+
+The window is saved in `boards.json`, so it survives a restart, and it ends
+on its own when it runs out. If the board is still not responding (or not
+processing DDP) when maintenance ends, that incident is reopened and alerts
+then. Editing the board keeps its maintenance window.
+
+API: `PUT /api/boards/{name}/maintenance` with
+`{"duration": "2h", "note": "…"}` (an empty duration means until turned
+off), and `DELETE /api/boards/{name}/maintenance`.
+
+### Quiet hours
+
+**⚙ Settings → Notifications → Quiet hours** holds notifications during a
+daily window, for example 22:00 to 07:00 (an end earlier than the start runs
+into the next morning), on the days you pick (a window belongs to the day it
+starts on). Times are in the monitor's time zone (`TZ`). When the window ends,
+each channel gets what was held for it: the alert itself if there was just
+one, otherwise one summary listing them all (a webhook gets
+`"event": "digest"` with the original alerts in `held`). Tick **Still send
+"Stopped responding" alerts** to let lockups, and their recoveries, through
+right away. The monitor-update alert is held too. Held alerts carry over a
+settings change but not a restart.
+
+In the config file:
+
+```json
+"quiet_hours": {"enabled": true, "start": "22:00", "end": "07:00", "days": [0, 1, 2, 3, 4, 5, 6], "allow_lockups": true}
+```
+
+`days` uses 0 for Sunday; leave it out for every day.
+
 ## Settings
 
 **⚙ Settings** in the header covers what you'd otherwise edit in the config
 file:
 
-- **Notifications:** channels, events, the dashboard URL.
+- **Notifications:** channels, events, quiet hours, the dashboard URL.
 - **Monitoring:** every polling interval, the default DDP check mode, the
   probe offset and burst.
 - **Alert rules:** down-after-N-failures, loss and latency warnings,
@@ -154,8 +200,8 @@ with no restart:
   Baldrick web API and lists what it finds, with one-click **Add**. The
   subnets of boards you already monitor are offered as suggestions.
 - Each card's **•••** menu has **Edit** (rename, change host or DDP mode;
-  a rename keeps the board's history) and **Remove**, which can optionally
-  delete the stored history.
+  a rename keeps the board's history), **Maintenance mode…** (see above) and
+  **Remove**, which can optionally delete the stored history.
 
 The board list is saved to `<data_dir>/boards.json`. The `boards` list in the
 config file only seeds that file on first start; after that, `boards.json`
@@ -210,6 +256,7 @@ The dashboard is at `http://host:8420/`. Other endpoints:
 - `GET /api/boards`: live state of every board
 - `GET /api/boards/{name}/history?range=24h`
 - `POST /api/boards/{name}/probe`: run a DDP check now
+- `PUT`/`DELETE /api/boards/{name}/maintenance`: start or end maintenance mode
 - `GET /api/meta`: intervals, retention, and how each value is collected
 - `GET /healthz`
 
@@ -277,6 +324,6 @@ scrape_configs:
       - targets: ["srv:8420"]
 ```
 
-Useful alerts: `baldrick_up == 0`, `baldrick_ddp_probe_success == 0`,
+Useful alerts: `baldrick_up == 0 unless on(board) baldrick_maintenance == 1`, `baldrick_ddp_probe_success == 0`,
 `increase(baldrick_reboots_detected_total[1h]) > 0`,
 `baldrick_icmp_loss_ratio > 0.05`, `baldrick_temperature_celsius > 70`.

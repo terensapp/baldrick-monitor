@@ -9,7 +9,7 @@
 :root {
   --bg: #f4f5f7; --panel: #ffffff; --raised: #f7f8fa; --fg: #14171c; --muted: #6b7280; --faint: #9aa1ad; --line: #e5e7eb;
   --accent: #4f46e5; --accent-fg: #ffffff;
-  --up: #16a34a; --degraded: #d97706; --down: #dc2626; --unknown: #6b7280;
+  --up: #16a34a; --degraded: #d97706; --down: #dc2626; --unknown: #6b7280; --maintenance: #7c3aed;
   --s1: #2563eb; --s2: #9333ea; --s3: #0891b2;
   --tip: #111827; --tipfg: #f9fafb; --shadow: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
   --radius: 14px; color-scheme: light;
@@ -18,7 +18,7 @@
   :root:not([data-theme="light"]) {
     --bg: #0c0e12; --panel: #14171d; --raised: #1b1f27; --fg: #e8eaed; --muted: #949bab; --faint: #6b7280; --line: #252a33;
     --accent: #818cf8; --accent-fg: #0c0e12;
-    --up: #22c55e; --degraded: #f59e0b; --down: #f87171; --unknown: #9ca3af;
+    --up: #22c55e; --degraded: #f59e0b; --down: #f87171; --unknown: #9ca3af; --maintenance: #a78bfa;
     --s1: #60a5fa; --s2: #c084fc; --s3: #22d3ee;
     --tip: #f3f4f6; --tipfg: #111827; --shadow: 0 1px 2px rgba(0,0,0,.4);
     color-scheme: dark;
@@ -55,7 +55,7 @@ main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 5
 /* cards */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; position: relative; }
 .card::before { content: ""; position: absolute; inset: -1px -1px auto -1px; height: 4px; border-radius: var(--radius) var(--radius) 0 0; background: var(--st, var(--unknown)); }
-.card[data-status="up"] { --st: var(--up); } .card[data-status="degraded"] { --st: var(--degraded); } .card[data-status="down"] { --st: var(--down); }
+.card[data-status="up"] { --st: var(--up); } .card[data-status="degraded"] { --st: var(--degraded); } .card[data-status="down"] { --st: var(--down); } .card[data-status="maintenance"] { --st: var(--maintenance); }
 .card-in { padding: 18px 18px 6px; }
 .head { display: flex; gap: 10px; align-items: flex-start; }
 .head .who { flex: 1; min-width: 0; }
@@ -129,6 +129,11 @@ dialog.xl { width: min(1000px, calc(100vw - 32px)); }
 .incbar .t .when { color: var(--muted); font-weight: 400; }
 .incbar .c { color: var(--muted); margin-top: 3px; font-size: 12.5px; }
 .incbar .a { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.maintbar { --ic: var(--maintenance); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.maintbar .t { flex: 1; min-width: 0; }
+.days { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; }
+.days label { display: inline-flex; gap: 5px; align-items: center; }
+.field .days input, .field .check input { width: auto; padding: 0; margin: 0; }
 a.btn { text-decoration: none; color: inherit; }
 .tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 99px; text-transform: uppercase; letter-spacing: .05em; color: var(--ic, var(--unknown)); background: color-mix(in srgb, var(--ic, var(--unknown)) 14%, transparent); white-space: nowrap; }
 .badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--down); color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
@@ -296,6 +301,18 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
   <p class="lead" id="faWhat"></p>
   <div class="field"><label for="faNote">Note (optional)</label><textarea id="faNote" placeholder="e.g. power-cycled by hand; FPP was mid-sequence"></textarea></div>
   <div class="foot"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ack">Acknowledge</button></div>
+</form></dialog>
+
+<dialog id="dlgMaint"><form method="dialog" id="fMaint">
+  <h3>Maintenance mode: <span id="fmName"></span></h3>
+  <p class="lead">Silences this board's alerts while you work on it. Incidents are still recorded, and acknowledged automatically.</p>
+  <div class="field"><label>For</label><div class="days" id="fmDur">
+    <label><input type="radio" name="fmDur" value="30m" checked> 30 minutes</label>
+    <label><input type="radio" name="fmDur" value="2h"> 2 hours</label>
+    <label><input type="radio" name="fmDur" value=""> Until I turn it off</label>
+  </div></div>
+  <div class="field"><label for="fmNote">Note (optional)</label><textarea id="fmNote" placeholder="e.g. swapping the power supply"></textarea></div>
+  <div class="foot"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="on">Start maintenance</button></div>
 </form></dialog>
 
 <dialog id="dlgUpd"><form method="dialog">
@@ -551,12 +568,14 @@ function live(b) {
           <button type="button" data-act="edit">Edit board…</button>
           <button type="button" data-act="probe" ${b.probe_mode === "off" ? "disabled" : ""}>Run DDP check now</button>
           <button type="button" data-act="capture">Collect diagnostics now</button>
+          ${b.maintenance ? `<button type="button" data-act="maint-off">End maintenance</button>` : `<button type="button" data-act="maint">Maintenance mode…</button>`}
           <button type="button" data-act="incidents">Incidents for this board${b.incident_total ? ` (${b.incident_total})` : ""}</button>
           <button type="button" data-act="open">Open board web UI ↗</button>
           <button type="button" data-act="remove" class="danger">Remove…</button>
         </div>
       </div>
     </div>
+    ${maintBanner(b)}
     ${incBanner(b)}
     ${reasons}
     <div class="kpis">
@@ -617,7 +636,7 @@ async function loadHistory(name) {
 function renderFleet(boards) {
   const n = s => boards.filter(b => b.status === s).length;
   const item = (s, label) => { const k = n(s); return `<span class="${k ? "" : "zero"}"><span class="dot" style="background:var(--${s})"></span>${k} ${label}</span>`; };
-  $("#fleet").innerHTML = boards.length ? item("up", "up") + item("degraded", "degraded") + item("down", "down") + (n("unknown") ? item("unknown", "starting") : "") : "";
+  $("#fleet").innerHTML = boards.length ? item("up", "up") + item("degraded", "degraded") + item("down", "down") + (n("maintenance") ? item("maintenance", "maintenance") : "") + (n("unknown") ? item("unknown", "starting") : "") : "";
   document.title = (n("down") ? `(${n("down")} down) ` : n("degraded") ? `(${n("degraded")} degraded) ` : "") + "Baldrick Monitor";
 }
 
@@ -685,6 +704,11 @@ document.addEventListener("click", async ev => {
     case "incidents": openIncidents(name || null); break;
     case "update": openUpdate(); break;
     case "settings": openSettings(); break;
+    case "maint": openMaint(name); break;
+    case "maint-off":
+      try { await api("DELETE", `api/boards/${encodeURIComponent(name)}/maintenance`); toast(`${name}: maintenance ended, alerts resume`); refresh(); }
+      catch (e) { toast(e.message, true); }
+      break;
     case "capture": {
       const note = prompt(`Collect diagnostics from ${name} now? This saves the last ${META?.recorder_window || "30m"} of telemetry plus a fresh check of every endpoint.\n\nOptional note:`, "");
       if (note === null) break;
@@ -817,6 +841,15 @@ function incColor(i) {
 const incTag = i => `<span class="tag" style="--ic:var(--${incColor(i)})">${TYPE_LABEL[i.type] || i.type}${i.ongoing ? " · ongoing" : ""}</span>`;
 const incWhen = i => i.ongoing ? `since ${when(i.started_at)}` : `${when(i.started_at)} · ${ago(i.started_at)}`;
 const exportURL = i => `api/incidents/${encodeURIComponent(i.id)}/export`;
+
+function maintBanner(b) {
+  const m = b.maintenance;
+  if (!m) return "";
+  const until = m.until ? `until ${new Date(m.until).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})} (${dur((new Date(m.until) - Date.now()) / 1000)} left)` : "until turned off";
+  return `<div class="incbar maintbar">
+    <div class="t"><span><b>In maintenance ${esc(until)}</b>: alerts are silenced.${m.note ? ` <span class="when">${esc(m.note)}</span>` : ""}</span></div>
+    <button class="btn sm" type="button" data-act="maint-off">End maintenance</button></div>`;
+}
 
 function incBanner(b) {
   const list = b.incidents || [];
@@ -961,6 +994,22 @@ async function openIncident(id) {
   history.replaceState(null, "", "#incident=" + i.id);
 }
 $("#dlgInc").addEventListener("close", () => { if (location.hash.startsWith("#incident=")) history.replaceState(null, "", location.pathname + location.search); });
+
+let maintFor = null;
+function openMaint(name) {
+  maintFor = name; $("#fmName").textContent = name; $("#fmNote").value = "";
+  $("#fMaint").querySelector('input[value="30m"]').checked = true;
+  $("#dlgMaint").showModal();
+}
+$("#dlgMaint").addEventListener("close", async () => {
+  if ($("#dlgMaint").returnValue !== "on" || !maintFor) return;
+  const name = maintFor; maintFor = null;
+  const duration = $("#fMaint").querySelector('input[name="fmDur"]:checked').value;
+  try {
+    await api("PUT", `api/boards/${encodeURIComponent(name)}/maintenance`, {duration, note: $("#fmNote").value.trim()});
+    toast(`${name} is in maintenance; its alerts are silenced`); refresh();
+  } catch (e) { toast(e.message, true); }
+});
 
 let acking = null;
 function openAck(id) {
@@ -1112,6 +1161,8 @@ function syncForm() {
     });
     ch.events = [...card.querySelectorAll("[data-ev]")].filter(x => x.checked).map(x => x.dataset.ev);
   });
+  const qd = [...document.querySelectorAll("#setBody [data-qday]")];
+  if (qd.length) SW.quiet_hours.days = qd.filter(x => x.checked).map(x => +x.dataset.qday);
 }
 function channelCard(ch, i) {
   const t = CH_TYPES[ch.type] || {label: ch.type};
@@ -1147,6 +1198,19 @@ function channelCard(ch, i) {
     <div class="chres" id="chres-${i}"></div>
   </div>`;
 }
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function quietHours() {
+  const q = SW.quiet_hours ??= {enabled: false, start: "22:00", end: "07:00", days: [], allow_lockups: false};
+  const days = q.days?.length ? q.days : [0, 1, 2, 3, 4, 5, 6];
+  return `<p class="note" style="margin-top:0">Alerts that come in during this window are held and sent as one summary when it ends. Boards in maintenance never alert. Times are in the monitor's time zone${SW.read_only?.time_zone ? ` (${esc(SW.read_only.time_zone)})` : ""}.</p>
+    ${fld("Quiet hours", "quiet_hours.enabled", "bool", {check: "Hold notifications during quiet hours"})}
+    <div class="form-grid">
+      <div class="field"><label>From</label><input type="time" data-k="quiet_hours.start" data-t="str" value="${esc(q.start || "22:00")}"></div>
+      <div class="field"><label>Until</label><input type="time" data-k="quiet_hours.end" data-t="str" value="${esc(q.end || "07:00")}"><span class="help">Earlier than the start time means the next morning.</span></div>
+    </div>
+    <div class="field"><label>Starting on</label><div class="days">${DAY_NAMES.map((d, i) => `<label><input type="checkbox" data-qday="${i}" ${days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>
+    ${fld("", "quiet_hours.allow_lockups", "bool", {check: "Still send “Stopped responding” alerts (and their recoveries) right away"})}`;
+}
 function renderSettings() {
   $("#setTabs").innerHTML = SET_TABS.map(([k, l]) => `<button type="button" data-settab="${k}" class="${setTab === k ? "on" : ""}">${l}</button>`).join("");
   const ro = SW.read_only || {};
@@ -1157,6 +1221,8 @@ function renderSettings() {
       h = `<p class="note" style="margin-top:0">Where alerts go when a board stops responding, reboots unexpectedly, stops processing DDP, or recovers. Repeats for the same board and event are held back for 2 minutes.</p>
         ${SW.notifications.map(channelCard).join("") || `<p class="note">No channels yet.</p>`}
         <div class="row" style="margin-top:4px"><div class="field"><label>Add a channel</label><select id="chNewType">${Object.entries(CH_TYPES).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join("")}</select></div><button class="btn" type="button" data-chact="add">＋ Add</button></div>
+        <div class="sechead">Quiet hours</div>
+        ${quietHours()}
         <div class="sechead">Links in alerts</div>
         <div class="row">${fld("Dashboard URL", "dashboard_url", "str", {ph: location.origin, help: "Alerts link straight to the incident on this dashboard."})}<button class="btn" type="button" data-setact="origin">Use this address</button></div>`;
       break;
@@ -1255,6 +1321,7 @@ $("#dlgSet").addEventListener("change", ev => {
 });
 $("#setSave").addEventListener("click", async () => {
   syncForm();
+  if (SW.quiet_hours?.enabled && Array.isArray(SW.quiet_hours.days) && !SW.quiet_hours.days.length) { toast("Pick at least one day for quiet hours", true); return; }
   const body = {...SW};
   delete body.read_only; delete body.events; delete body.auth_required;
   const tok = $("#tokNew")?.value.trim() || "";

@@ -79,9 +79,10 @@ func writeMetrics(w io.Writer, views []BoardView) {
 	for _, v := range views {
 		n := v.Name
 		g("up", "1 if the board answers HTTP /ping.", b2f(v.HTTPFails < 1 && v.HTTP.Count > 0), n)
-		for _, s := range []string{"up", "degraded", "down", "unknown"} {
+		for _, s := range []string{"up", "degraded", "down", "unknown", "maintenance"} {
 			g("health_status", "Overall health (one-hot).", b2f(v.Status == s), n, "status", s)
 		}
+		g("maintenance", "1 while the board is in maintenance (alerts silenced).", b2f(v.Maintenance != nil), n)
 		g("info", "Board identity.", 1, n, "host", v.Host, "hostname", v.Hostname, "model", v.Model,
 			"manufacturer", v.Manufacturer, "board_id", v.BoardID, "firmware", v.Firmware, "factory_firmware", v.FactoryFirmware)
 		g("update_available", "1 if the board reports newer firmware.", b2f(v.UpdateAvailable), n)

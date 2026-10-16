@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"time"
 )
 
 // UISettings is everything the dashboard can change. It's saved to
@@ -26,17 +27,20 @@ type UISettings struct {
 	Incidents       IncidentsConfig `json:"incidents"`
 	UpdateInterval  Duration        `json:"update_check_interval"`
 	UpdatesDisabled bool            `json:"updates_disabled"`
+	QuietHours      QuietHours      `json:"quiet_hours"`
 	AdminToken      string          `json:"admin_token,omitempty"` // never sent to the browser
 }
 
 func (c *Config) uiSettings() UISettings {
+	q := c.QuietHours
+	q.Days = slices.Clone(q.Days)
 	return UISettings{
 		TemperatureUnit: c.TemperatureUnit, DashboardURL: c.DashboardURL,
 		Notifications: slices.Clone(c.Notifications), Thresholds: c.Thresholds,
 		Intervals: c.Intervals, DDPProbe: c.DDPProbe,
 		HistoryDays: c.History.RetentionDays, Resolution: c.History.Resolution,
 		Incidents: c.Incidents, UpdateInterval: c.Updates.CheckInterval, UpdatesDisabled: c.Updates.Disabled,
-		AdminToken: c.AdminToken,
+		QuietHours: q, AdminToken: c.AdminToken,
 	}
 }
 
@@ -47,7 +51,7 @@ func (s UISettings) applyTo(c *Config) {
 	c.History.RetentionDays, c.History.Resolution = s.HistoryDays, s.Resolution
 	c.Incidents = s.Incidents
 	c.Updates.CheckInterval, c.Updates.Disabled = s.UpdateInterval, s.UpdatesDisabled
-	c.AdminToken = s.AdminToken
+	c.AdminToken, c.QuietHours = s.AdminToken, s.QuietHours
 	// The legacy alerts block has been folded into Notifications.
 	c.Alerts = AlertsConfig{}
 }
@@ -138,6 +142,7 @@ func (c *Config) settingsView(configPath string) SettingsView {
 	v.ReadOnly = map[string]any{
 		"listen": c.Listen, "data_dir": c.History.DataDir, "config_file": configPath,
 		"settings_file": c.settingsPath(), "can_save": c.settingsPath() != "",
+		"time_zone": time.Now().Format("MST, UTC-07:00"),
 	}
 	return v
 }

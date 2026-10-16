@@ -168,6 +168,7 @@ type Board struct {
 	activeLockup *Incident
 	activeDDP    *Incident
 	ddpFails     int
+	maint        *Maintenance // b.cfg.Maintenance is only the starting value
 }
 
 func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
@@ -195,6 +196,7 @@ func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
 		store:       openStore(glob.History.DataDir, cfg.Name, glob.retention()),
 		rec:         recorder{window: glob.Incidents.RecorderWindow.Duration},
 		timelines:   map[string][]RecPoint{},
+		maint:       cfg.Maintenance,
 	}
 	b.loadIncidents()
 	b.prevRun = b.loadLastState()
@@ -767,8 +769,10 @@ type PortView struct {
 type BoardView struct {
 	Name    string   `json:"name"`
 	Host    string   `json:"host"`
-	Status  string   `json:"status"` // up, degraded, down, unknown
+	Status  string   `json:"status"` // up, degraded, down, unknown, maintenance
 	Reasons []string `json:"reasons"`
+	// Set while alerts for the board are silenced.
+	Maintenance *Maintenance `json:"maintenance"`
 
 	Hostname          string                 `json:"hostname"`
 	Manufacturer      string                 `json:"manufacturer"`
@@ -898,6 +902,12 @@ func (b *Board) View() BoardView {
 	}
 	v.IncidentTotal = len(b.incidents)
 	v.Status, v.Reasons = b.health(&v)
+	if m := b.maintenanceLocked(time.Now()); m != nil {
+		mc := *m
+		v.Maintenance = &mc
+		// Keep the reasons so whoever is working on it can see what's wrong.
+		v.Status = "maintenance"
+	}
 	return v
 }
 
