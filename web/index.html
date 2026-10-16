@@ -32,7 +32,7 @@ code { font-size: 12px; }
 
 /* top bar */
 .top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
-.top-inner { max-width: 1680px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.top-inner { margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
 .brand h1 { font-size: 16px; margin: 0; letter-spacing: -.01em; line-height: 1.2; }
 .brand small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
@@ -47,10 +47,10 @@ code { font-size: 12px; }
 .btn.ghost { box-shadow: none; background: transparent; }
 .btn:disabled { opacity: .5; cursor: default; }
 .btn.sm { padding: 3px 9px; font-size: 12px; }
-.sub { max-width: 1680px; margin: 0 auto; padding: 10px 20px 0; display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; color: var(--muted); font-size: 12px; }
+.sub { margin: 0 auto; padding: 10px 20px 0; display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; color: var(--muted); font-size: 12px; }
 .sub b { color: var(--fg); }
 
-main { max-width: 1680px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 560px), 1fr)); gap: 16px; padding: 12px 20px 32px; align-items: start; }
+main { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; padding: 12px 20px 32px; align-items: start; }
 
 /* cards */
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; position: relative; }
@@ -123,6 +123,45 @@ details.sec .body { padding-bottom: 14px; }
 /* dialogs */
 dialog { border: 1px solid var(--line); border-radius: 16px; padding: 0; background: var(--panel); color: var(--fg); width: min(520px, calc(100vw - 32px)); box-shadow: 0 24px 64px rgba(0,0,0,.3); }
 dialog.wide { width: min(780px, calc(100vw - 32px)); }
+dialog.xl { width: min(1000px, calc(100vw - 32px)); }
+.incbar { --ic: var(--down); margin: 12px 0 0; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--ic) 35%, transparent); background: color-mix(in srgb, var(--ic) 8%, transparent); padding: 10px 12px; font-size: 13px; }
+.incbar .t { font-weight: 650; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.incbar .t .when { color: var(--muted); font-weight: 400; }
+.incbar .c { color: var(--muted); margin-top: 3px; font-size: 12.5px; }
+.incbar .a { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+a.btn { text-decoration: none; color: inherit; }
+.tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 99px; text-transform: uppercase; letter-spacing: .05em; color: var(--ic, var(--unknown)); background: color-mix(in srgb, var(--ic, var(--unknown)) 14%, transparent); white-space: nowrap; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--down); color: #fff; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.badge.zero { display: none; }
+.tabs { display: inline-flex; background: var(--raised); border-radius: 8px; padding: 2px; gap: 2px; margin-bottom: 10px; }
+.tabs button { border: 0; background: none; padding: 4px 12px; border-radius: 6px; font-size: 12.5px; cursor: pointer; color: var(--muted); }
+.tabs button.on { background: var(--panel); color: var(--fg); box-shadow: var(--shadow); font-weight: 600; }
+table.inc { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.inc th { text-align: left; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+table.inc td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.inc tr.row { cursor: pointer; }
+table.inc tr.row:hover td { background: var(--raised); }
+table.inc .cause { color: var(--muted); font-size: 12px; margin-top: 2px; max-width: 420px; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; margin: 12px 0; }
+.kv div { background: var(--raised); border-radius: 8px; padding: 6px 9px; min-width: 0; }
+.kv b { display: block; font-size: 11px; color: var(--muted); font-weight: 600; }
+.kv span { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.causebox { border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--ic) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ic) 30%, transparent); font-size: 13.5px; }
+.findings { margin: 10px 0 0; padding-left: 18px; font-size: 13px; }
+.findings li { margin: 3px 0; }
+.dsec { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 18px 0 6px; }
+table.diag { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.diag td { padding: 4px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.diag td.d { color: var(--muted); overflow-wrap: anywhere; }
+table.diag td.num { white-space: nowrap; }
+table.diag.snap { min-width: 680px; }
+.tlcharts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.tlchart svg { width: 100%; height: 96px; display: block; }
+.tlchart .t { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; margin-top: 2px; }
+.mk { font-size: 11px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+textarea { font: inherit; color: inherit; width: 100%; min-height: 70px; border: 1px solid var(--line); background: var(--raised); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+.dlgbody { max-height: calc(100vh - 220px); overflow: auto; margin: 0 -20px; padding: 0 20px; }
+@media (max-width: 700px) { .tlcharts { grid-template-columns: 1fr; } }
 dialog::backdrop { background: rgba(10,12,16,.45); backdrop-filter: blur(2px); }
 dialog form { padding: 20px; }
 dialog h3 { margin: 0 0 4px; font-size: 17px; }
@@ -171,6 +210,7 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
   </div>
   <div class="fleet" id="fleet"></div>
   <div class="actions">
+    <button class="btn" id="btnInc" type="button" data-act="incidents">Incidents <span class="badge zero" id="incBadge">0</span></button>
     <button class="btn" id="btnScan" type="button">⌕ Scan network</button>
     <button class="btn primary" id="btnAdd" type="button">＋ Add board</button>
   </div>
@@ -219,6 +259,26 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
   </div>
   <div class="scanwrap" id="fsOut"></div>
   <div class="foot"><button class="btn ghost" value="close" formnovalidate>Close</button></div>
+</form></dialog>
+
+<dialog id="dlgIncs" class="xl"><form method="dialog">
+  <h3 id="ilTitle">Incidents</h3>
+  <p class="lead">Reboots, lockups and DDP failures the monitor has caught, kept <span id="ilKeep">90</span> days. Each one keeps the telemetry leading up to it.</p>
+  <div class="tabs"><button type="button" data-iltab="open" class="on">Needs attention</button><button type="button" data-iltab="all">All</button></div>
+  <div class="dlgbody" id="ilOut"></div>
+  <div class="foot"><button class="btn ghost" value="close">Close</button></div>
+</form></dialog>
+
+<dialog id="dlgInc" class="xl"><form method="dialog">
+  <div id="idOut"></div>
+  <div class="foot" id="idFoot"></div>
+</form></dialog>
+
+<dialog id="dlgAck"><form method="dialog" id="fAck">
+  <h3>Acknowledge</h3>
+  <p class="lead" id="faWhat"></p>
+  <div class="field"><label for="faNote">Note (optional)</label><textarea id="faNote" placeholder="e.g. power-cycled by hand; FPP was mid-sequence"></textarea></div>
+  <div class="foot"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ack">Acknowledge</button></div>
 </form></dialog>
 
 <div id="tip" role="tooltip"></div>
@@ -384,7 +444,9 @@ function live(b) {
     const e = b.endpoints?.[path], cls = !e ? "" : e.last_ok ? "ok" : "bad";
     return `<span class="chip" ${srcAttrs(src, {ep: path})}><span class="dot ${cls}"></span>${label}${e ? ` <span class="num">${f1(e.last_ms)} ms</span>` : ""}${icon(src)}</span>`;
   };
-  const reasons = b.reasons?.length ? `<div class="callout"><ul>${b.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>` : "";
+  const incTitles = (b.incidents || []).map(i => i.title);
+  const rs = (b.reasons || []).filter(r => !incTitles.some(t => r.startsWith(t)) && !/incidents not acknowledged/.test(r));
+  const reasons = rs.length ? `<div class="callout"><ul>${rs.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>` : "";
   const ddpVal = !p ? `<span class="spin"></span>` : p.ok ? "OK" : "FAILED";
   const ddpSub = !p ? "first check pending" : p.passive ? "live stream · " + ago(p.time) : (p.ok ? `seen in ${f1(p.detect_ms / 1000)}s · ` : "") + ago(p.time);
   const warnC = META?.thresholds?.temp_warn_c ?? 70;
@@ -430,7 +492,7 @@ function live(b) {
       ${stat("OOM events", f1(b.oom_count), "board", {field: "oom_count", cls: b.oom_count > 0 ? "bad" : ""})}
       ${stat("Ports in use", ports.length ? `${ports.length} / ${b.ports.length}` : "–", "settings", {extra: (b.ports || []).map((x, i) => `P${i + 1}: ${x.models ? `${x.models} model(s), ${x.channels} ch` : "unused"}`).join(" · ")})}
       ${stat("Channels", chans ? chans.toLocaleString() : "–", "settings")}
-      ${stat("Throughput", f1(b.network_throughput), "board", {field: "network_throughput", extra: "As reported by the board (units unspecified)"})}
+      ${stat("Throughput", f1(b.network_throughput / 1024) + " KB/s", "board", {field: "network_throughput", extra: "Streaming data the board is receiving, in bytes per second (e.g. 3,192 channels × 20 fps ≈ 64 KB/s)"})}
       ${stat("FPP peers", String(b.fpp?.length || 0), "board", {field: "fpp", extra: (b.fpp || []).map(f => `${f.hostname} ${f.ip} (v${f.sw_version})`).join(" · ") || "none seen"})}
       ${stat("Test mode", b.test_mode ? "ACTIVE" : "off", "board", {field: "test_mode_active", cls: b.test_mode ? "warn" : ""})}
     </div>`;
@@ -446,15 +508,18 @@ function live(b) {
         <div class="menu" role="menu">
           <button type="button" data-act="edit">Edit board…</button>
           <button type="button" data-act="probe" ${b.probe_mode === "off" ? "disabled" : ""}>Run DDP check now</button>
+          <button type="button" data-act="capture">Collect diagnostics now</button>
+          <button type="button" data-act="incidents">Incidents for this board${b.incident_total ? ` (${b.incident_total})` : ""}</button>
           <button type="button" data-act="open">Open board web UI ↗</button>
           <button type="button" data-act="remove" class="danger">Remove…</button>
         </div>
       </div>
     </div>
+    ${incBanner(b)}
     ${reasons}
     <div class="kpis">
-      ${kpi("Ping", b.icmp_available && b.icmp.count ? `${f2(b.icmp.p50)}<small>ms</small>` : "–", b.icmp_available ? `p95 ${f2(b.icmp.p95)} · loss ${pct(b.icmp.loss)}` : "ICMP unavailable", "icmp", {cls: b.icmp.loss > 0 ? "warn" : ""})}
-      ${kpi("HTTP", b.http.count ? `${f2(b.http.p50)}<small>ms</small>` : "–", `${epOK}/${epSeen || 4} endpoints OK`, "http_ping", {cls: b.http_consecutive_failures ? "bad" : epOK < epSeen ? "warn" : ""})}
+      ${kpi("Ping", b.icmp_available && b.icmp.count > b.icmp.lost ? `${f2(b.icmp.p50)}<small>ms</small>` : "–", b.icmp_available ? `p95 ${f2(b.icmp.p95)} · loss ${pct(b.icmp.loss)}` : "ICMP unavailable", "icmp", {cls: b.icmp.loss > 0 ? "warn" : ""})}
+      ${kpi("HTTP", b.http.count > b.http.lost ? `${f2(b.http.p50)}<small>ms</small>` : "–", `${epOK}/${epSeen || 4} endpoints OK`, "http_ping", {cls: b.http_consecutive_failures ? "bad" : epOK < epSeen ? "warn" : ""})}
       ${kpi("DDP", ddpVal, ddpSub, "ddp_probe", {cls: p ? (p.ok ? "good" : "bad") : ""})}
       ${kpi("Temp", tc == null ? "–" : `${f1(toUnit(tc))}<small>°${tUnit()}</small>`, tc != null ? (tUnit() === "F" ? `${f1(tc)} °C` : `${f1(tc * 9 / 5 + 32)} °F`) : "–", "board", {field: "temperature", cls: tc > warnC ? "warn" : "", extra: tc != null ? `${f1(tc)} °C / ${f1(tc * 9 / 5 + 32)} °F · warns above ${temp(warnC)}` : ""})}
       ${kpi("Uptime", dur(b.uptime), b.reboots ? `${b.reboots} reboot${b.reboots > 1 ? "s" : ""} seen` : "no reboots seen", "board", {field: "uptime", cls: b.reboots ? "warn" : ""})}
@@ -544,6 +609,8 @@ async function refresh() {
     $(".live", c.el).innerHTML = live(b);
     if (menuOpen) $(".menu", c.el).classList.add("open");
   }
+  const open = boards.reduce((n, b) => n + (b.incidents || []).length, 0);
+  $("#incBadge").textContent = open; $("#incBadge").classList.toggle("zero", !open);
   $("#meta").textContent = `Updated ${new Date().toLocaleTimeString()}`;
   refreshTip();
 }
@@ -573,6 +640,15 @@ document.addEventListener("click", async ev => {
     case "edit": openBoard(b); break;
     case "open": window.open(`http://${b.host}/`, "_blank", "noopener"); break;
     case "remove": openRemove(name); break;
+    case "incidents": openIncidents(name || null); break;
+    case "capture": {
+      const note = prompt(`Collect diagnostics from ${name} now? This saves the last ${META?.recorder_window || "30m"} of telemetry plus a fresh check of every endpoint.\n\nOptional note:`, "");
+      if (note === null) break;
+      toast(`Collecting diagnostics from ${name}…`);
+      try { const inc = await api("POST", `api/boards/${encodeURIComponent(name)}/capture`, {note}); refresh(); openIncident(inc.id); }
+      catch (e) { toast(e.message, true); }
+      break;
+    }
     case "probe":
       t.disabled = true;
       try { await api("POST", `api/boards/${encodeURIComponent(name)}/probe`); toast(`DDP check started for ${name}`); }
@@ -686,10 +762,205 @@ $("#fsOut").addEventListener("click", async ev => {
 $("#btnAdd").addEventListener("click", () => openBoard());
 $("#btnScan").addEventListener("click", openScan);
 
+// ---------- incidents ----------
+const TYPE_LABEL = {reboot: "Reboot", lockup: "Lockup", ddp: "DDP", manual: "Capture"};
+function incColor(i) {
+  if (i.type === "manual") return "s3";
+  if (i.ack && !i.ongoing) return "unknown";
+  if (i.type === "ddp" || (i.type === "reboot" && i.kind !== "unexpected")) return "degraded";
+  return "down";
+}
+const incTag = i => `<span class="tag" style="--ic:var(--${incColor(i)})">${TYPE_LABEL[i.type] || i.type}${i.ongoing ? " · ongoing" : ""}</span>`;
+const incWhen = i => i.ongoing ? `since ${when(i.started_at)}` : `${when(i.started_at)} · ${ago(i.started_at)}`;
+const exportURL = i => `api/incidents/${encodeURIComponent(i.id)}/export`;
+
+function incBanner(b) {
+  const list = b.incidents || [];
+  if (!list.length) return "";
+  const i = list[0];
+  return `<div class="incbar" style="--ic:var(--${incColor(i)})">
+    <div class="t">${incTag(i)}${esc(i.title)}<span class="when">${incWhen(i)}</span></div>
+    <div class="c">${esc(i.cause)}</div>
+    <div class="a">
+      <button class="btn sm" type="button" data-inc="${esc(i.id)}" data-iact="view">Details</button>
+      <a class="btn sm" href="${exportURL(i)}" download>Export telemetry</a>
+      <button class="btn sm primary" type="button" data-inc="${esc(i.id)}" data-iact="ack">Acknowledge</button>
+      ${list.length > 1 ? `<button class="btn sm ghost" type="button" data-act="incidents">+${list.length - 1} more</button>` : ""}
+    </div></div>`;
+}
+
+let ilBoard = null, ilTab = "open";
+async function openIncidents(board) {
+  ilBoard = board;
+  $("#ilTitle").textContent = board ? `Incidents: ${board}` : "Incidents";
+  $("#ilKeep").textContent = META?.incident_retention_days ?? 90;
+  if (!$("#dlgIncs").open) $("#dlgIncs").showModal();
+  await renderIncidents();
+}
+async function renderIncidents() {
+  document.querySelectorAll("[data-iltab]").forEach(b => b.classList.toggle("on", b.dataset.iltab === ilTab));
+  const out = $("#ilOut");
+  let list;
+  try { list = await (await fetch("api/incidents" + (ilBoard ? "?board=" + encodeURIComponent(ilBoard) : ""))).json(); }
+  catch { out.innerHTML = `<p class="note">Couldn't load incidents.</p>`; return; }
+  if (ilTab === "open") list = list.filter(i => !i.ack);
+  out.innerHTML = list.length ? `<table class="inc"><thead><tr><th>When</th><th>Board</th><th>What happened</th><th>Duration</th><th>Status</th><th></th></tr></thead><tbody>${list.map(i => `
+    <tr class="row" data-inc="${esc(i.id)}" data-iact="view">
+      <td class="num" style="white-space:nowrap">${when(i.started_at)}<div class="cause">${ago(i.started_at)}</div></td>
+      <td>${esc(i.board)}</td>
+      <td>${incTag(i)} ${esc(i.title)}<div class="cause">${esc(i.cause)}</div></td>
+      <td class="num">${i.ongoing ? "ongoing" : i.duration_s ? dur(i.duration_s) : "–"}</td>
+      <td>${i.ack ? `<span style="color:var(--muted)">${i.ack.auto ? "auto-" : ""}acknowledged</span>` : `<b class="bad">needs attention</b>`}</td>
+      <td style="text-align:right;white-space:nowrap"><a class="btn sm" href="${exportURL(i)}" download title="Export telemetry">⤓</a>${i.ack ? "" : ` <button class="btn sm primary" type="button" data-inc="${esc(i.id)}" data-iact="ack">Ack</button>`}</td>
+    </tr>`).join("")}</tbody></table>`
+    : `<p class="note">${ilTab === "open" ? "Nothing needs attention." : "No incidents recorded."}</p>`;
+}
+
+function parseTL(tl) {
+  const r = {icmp: [], http: [], ram: [], blk: [], temp: [], fps: [], events: []};
+  for (const p of tl || []) {
+    const t = +new Date(p.t), v = p.v || {};
+    switch (p.k) {
+      case "icmp": r.icmp.push({t, v: v.lost ? null : v.ms}); break;
+      case "http": if (v.ep === "/ping") r.http.push({t, v: v.ok ? v.ms : null}); break;
+      case "state": {
+        const d = v.d || {};
+        if (d.ram_available != null) r.ram.push({t, v: d.ram_available / 1024});
+        if (d.ram_largest_block != null) r.blk.push({t, v: d.ram_largest_block / 1024});
+        if (d.temperature?.length) r.temp.push({t, v: toUnit(d.temperature[0])});
+        if (d.frame_rate != null) r.fps.push({t, v: d.frame_rate});
+        break;
+      }
+      case "event": r.events.push({t, ...v}); break;
+    }
+  }
+  return r;
+}
+function tlChart(series, markers, t0, t1, fmt) {
+  const W = 400, H = 96, span = Math.max(t1 - t0, 1), x = t => ((t - t0) / span * W).toFixed(1);
+  let max = 0;
+  for (const se of series) for (const p of se.pts) if (p.v != null) max = Math.max(max, p.v);
+  const top = max * 1.15 || 1;
+  const paths = series.map(se => {
+    let d = "", miss = "", pen = false;
+    for (const p of se.pts) {
+      if (p.v == null) { pen = false; if (se.lossMarks) miss += `<rect x="${x(p.t)}" width="1.5" y="0" height="${H}" fill="var(--down)" opacity=".45"/>`; continue; }
+      d += `${pen ? "L" : "M"}${x(p.t)},${(H - 2 - p.v / top * (H - 6)).toFixed(1)}`; pen = true;
+    }
+    return miss + `<path d="${d}" fill="none" stroke="var(--${se.color})" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
+  const mk = markers.filter(m => m.t >= t0 && m.t <= t1).map(m => `<line x1="${x(m.t)}" x2="${x(m.t)}" y1="0" y2="${H}" stroke="var(--${m.color})" stroke-width="1.5" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><rect width="${W}" height="${H}" fill="var(--raised)" rx="4"/>${paths}${mk}</svg>
+    <div class="t"><span>${series.map(s => `<span style="color:var(--${s.color})">●</span> ${s.label}`).join("&nbsp; ")}</span><span class="num">peak ${fmt(max)}</span></div>`;
+}
+
+// One row per check; the repeated ICMP echoes collapse into a summary.
+function diagRows(ds) {
+  const pings = ds.filter(d => d.check === "ICMP echo");
+  const rows = ds.filter(d => d.check !== "ICMP echo").map(d => `<tr><td><span class="dot ${d.ok ? "ok" : "bad"}"></span>${esc(d.check)}</td><td class="num">${d.status || ""}</td><td class="num">${f1(d.ms)} ms</td><td class="d">${esc(d.detail || "")}</td></tr>`);
+  if (pings.length) {
+    const ok = pings.filter(d => d.ok), avg = ok.length ? ok.reduce((a, d) => a + d.ms, 0) / ok.length : null;
+    rows.push(`<tr><td><span class="dot ${ok.length === pings.length ? "ok" : ok.length ? "warn" : "bad"}"></span>ICMP echo ×${pings.length}</td><td></td><td class="num">${avg == null ? "–" : f2(avg) + " ms"}</td><td class="d">${ok.length} of ${pings.length} answered</td></tr>`);
+  }
+  return rows.join("");
+}
+
+let curInc = null;
+async function openIncident(id) {
+  let i;
+  try { i = await api("GET", "api/incidents/" + encodeURIComponent(id)); }
+  catch (e) { toast(e.message, true); return; }
+  curInc = i;
+  const tl = parseTL(i.timeline);
+  const t0 = i.timeline?.length ? +new Date(i.timeline[0].t) : +new Date(i.started_at) - 6e5;
+  const t1 = Math.max(i.timeline?.length ? +new Date(i.timeline[i.timeline.length - 1].t) : 0, +new Date(i.resolved_at || i.detected_at)) + 1000;
+  const markers = [
+    {t: +new Date(i.started_at), color: "degraded", label: "started"},
+    i.reboot_at && {t: +new Date(i.reboot_at), color: "down", label: "rebooted"},
+    i.resolved_at && {t: +new Date(i.resolved_at), color: "up", label: "recovered"},
+  ].filter(Boolean);
+  const kv = (k, v) => v ? `<div><b>${k}</b><span class="num">${v}</span></div>` : "";
+  const snap = (label, s) => !s || !s.at ? "" : `<tr><td>${label}</td><td class="num">${when(s.at)}</td><td class="num">${dur(s.uptime)}</td><td class="num">${kb(s.ram_available)} / ${kb(s.ram_largest_block)}</td><td class="num">${temp(s.temperature?.[0])}</td><td class="num">${f1(s.frame_rate)} fps · ${esc((s.ddp?.sources || []).join(", ") || "no DDP")}</td><td>${esc(s.firmware)}</td></tr>`;
+  const ev = tl.events.slice(-40).reverse();
+  $("#idOut").innerHTML = `
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${incTag(i)}<h3 style="margin:0">${esc(i.title)}</h3></div>
+    <p class="lead" style="margin-top:4px">${esc(i.board)} · ${esc(i.host)}${i.monitor_offline ? " · happened while the monitor was offline" : ""}</p>
+    <div class="dlgbody">
+      <div class="causebox" style="--ic:var(--${incColor(i)})"><b>Likely cause.</b> ${esc(i.cause)}</div>
+      <div class="kv">
+        ${kv("Started", when(i.started_at))}${kv("Detected", when(i.detected_at))}
+        ${kv(i.ongoing ? "Status" : "Resolved", i.ongoing ? "ongoing" : i.resolved_at ? when(i.resolved_at) : "")}
+        ${kv("Duration", i.duration_s ? dur(i.duration_s) : "")}${kv("Resolution", esc(i.resolution || ""))}
+        ${kv("Rebooted at", i.reboot_at ? when(i.reboot_at) : "")}${kv("Uptime before", i.prev_uptime_s ? dur(i.prev_uptime_s) : "")}
+        ${kv("Silent before boot", i.type === "reboot" && !i.monitor_offline ? dur(i.silence_s) : "")}${kv("Last heard from", i.last_seen_at && !i.last_seen_at.startsWith("0001") ? when(i.last_seen_at) : "")}
+        ${kv("Acknowledged", i.ack ? `${when(i.ack.at)}${i.ack.note ? " · " + esc(i.ack.note) : ""}` : "")}
+      </div>
+      <div class="dsec">Findings</div>
+      <ul class="findings">${(i.findings || []).map(f => `<li>${esc(f)}</li>`).join("") || "<li>None</li>"}</ul>
+      ${i.diagnostics?.length ? `<div class="dsec">Diagnostic sweep (${when(i.diagnostics[0].t)})</div>
+        <table class="diag">${diagRows(i.diagnostics)}</table>` : ""}
+      ${i.timeline?.length ? `<div class="dsec">Recorded telemetry (${dur((t1 - t0) / 1000)})</div>
+        <div class="tlcharts">
+          <div class="tlchart">${tlChart([{label: "ICMP RTT", color: "s1", pts: tl.icmp, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms")}</div>
+          <div class="tlchart">${tlChart([{label: "HTTP /ping", color: "s2", pts: tl.http, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms")}</div>
+          <div class="tlchart">${tlChart([{label: "RAM free KB", color: "s3", pts: tl.ram}, {label: "Largest block KB", color: "s2", pts: tl.blk}], markers, t0, t1, f1)}</div>
+          <div class="tlchart">${tlChart([{label: "Temp °" + tUnit(), color: "degraded", pts: tl.temp}, {label: "fps", color: "s1", pts: tl.fps}], markers, t0, t1, f1)}</div>
+        </div>
+        <div class="mk">${markers.map(m => `<span><span style="color:var(--${m.color})">┆</span> ${m.label} ${new Date(m.t).toLocaleTimeString()}</span>`).join("")}<span><span style="color:var(--down)">▮</span> no reply</span></div>` : `<p class="note">No raw telemetry was recorded for this incident.</p>`}
+      ${i.before?.at ? `<div class="dsec">Board state</div><div class="scanwrap"><table class="diag snap"><tr style="color:var(--muted)"><td></td><td>At</td><td>Uptime</td><td>RAM free / largest</td><td>Temp</td><td>Streaming</td><td>Firmware</td></tr>${snap("Before", i.before)}${snap("After", i.after)}</table></div>` : ""}
+      ${ev.length ? `<div class="dsec">Events</div><ul class="events">${ev.map(e => `<li class="${e.level}"><span class="num">${when(e.time || e.t)}</span><span>${esc(e.msg)}</span></li>`).join("")}</ul>` : ""}
+    </div>`;
+  $("#idFoot").innerHTML = `<a class="btn" href="${exportURL(i)}" download>⤓ Export telemetry (JSON)</a>
+    ${i.ack ? `<button class="btn" type="button" data-inc="${esc(i.id)}" data-iact="reopen">Reopen</button>` : `<button class="btn primary" type="button" data-inc="${esc(i.id)}" data-iact="ack">Acknowledge…</button>`}
+    <button class="btn ghost" value="close">Close</button>`;
+  if (!$("#dlgInc").open) $("#dlgInc").showModal();
+  history.replaceState(null, "", "#incident=" + i.id);
+}
+$("#dlgInc").addEventListener("close", () => { if (location.hash.startsWith("#incident=")) history.replaceState(null, "", location.pathname + location.search); });
+
+let acking = null;
+function openAck(id) {
+  acking = id;
+  const i = curInc?.id === id ? curInc : Object.values(cards).flatMap(c => c.view?.incidents || []).find(x => x.id === id);
+  $("#faWhat").textContent = i ? `${i.board}: ${i.title} (${when(i.started_at)}). It will stop showing as an active issue.` : "";
+  $("#faNote").value = "";
+  $("#dlgAck").showModal();
+}
+$("#dlgAck").addEventListener("close", async () => {
+  if ($("#dlgAck").returnValue !== "ack" || !acking) return;
+  const id = acking; acking = null;
+  try {
+    await api("POST", `api/incidents/${encodeURIComponent(id)}/ack`, {note: $("#faNote").value.trim()});
+    toast("Acknowledged"); afterIncidentChange(id);
+  } catch (e) { toast(e.message, true); }
+});
+async function afterIncidentChange(id) {
+  refresh();
+  if ($("#dlgIncs").open) renderIncidents();
+  if ($("#dlgInc").open && curInc?.id === id) openIncident(id);
+}
+
+document.addEventListener("click", async ev => {
+  const tab = ev.target.closest("[data-iltab]");
+  if (tab) { ilTab = tab.dataset.iltab; renderIncidents(); return; }
+  const t = ev.target.closest("[data-iact]");
+  if (!t || ev.target.closest("a")) return;
+  const id = t.dataset.inc;
+  if (t.dataset.iact === "view") openIncident(id);
+  if (t.dataset.iact === "ack") { ev.stopPropagation(); openAck(id); }
+  if (t.dataset.iact === "reopen") {
+    try { await api("POST", `api/incidents/${encodeURIComponent(id)}/reopen`); toast("Reopened"); afterIncidentChange(id); }
+    catch (e) { toast(e.message, true); }
+  }
+});
+function routeHash() { const m = location.hash.match(/^#incident=(.+)$/); if (m) openIncident(decodeURIComponent(m[1])); }
+window.addEventListener("hashchange", routeHash);
+
 async function loadMeta() { try { META = await (await fetch("api/meta")).json(); } catch {} }
 (async () => {
   await loadMeta();
   await refresh();
+  routeHash();
   setInterval(refresh, 2000);
   setInterval(() => Object.keys(cards).forEach(loadHistory), 60000);
 })();

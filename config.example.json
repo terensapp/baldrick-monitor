@@ -2,7 +2,10 @@
   "listen": ":8420",
   "temperature_unit": "F",
   "boards": [
-    { "name": "pixel1", "host": "192.168.6.4" }
+    {
+      "name": "pixel1",
+      "host": "192.168.6.4"
+    }
   ],
   "intervals": {
     "icmp": "1s",
@@ -30,5 +33,14 @@
     "ddp_loss_warn": 0.01,
     "temp_warn_c": 70,
     "ram_min_warn_bytes": 20000
+  },
+  "incidents": {
+    "retention_days": 90,
+    "recorder_window": "30m"
+  },
+  "alerts": {
+    "webhook_url": "",
+    "format": "json",
+    "dashboard_url": ""
   }
 }

@@ -10,13 +10,16 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
 	"os/signal"
 	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -87,17 +90,20 @@ func main() {
 	})
 	mux.HandleFunc("GET /api/meta", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"sources":           cfg.sources(),
-			"intervals":         cfg.Intervals,
-			"retention_days":    cfg.History.RetentionDays,
-			"resolution":        cfg.History.Resolution,
-			"persistent":        cfg.History.DataDir != "",
-			"boards_persistent": reg.Persistent(),
-			"auth_required":     cfg.AdminToken != "",
-			"probe":             cfg.DDPProbe,
-			"thresholds":        cfg.Thresholds,
-			"temperature_unit":  cfg.TemperatureUnit,
-			"suggested_subnets": suggestedSubnets(reg),
+			"sources":                 cfg.sources(),
+			"intervals":               cfg.Intervals,
+			"retention_days":          cfg.History.RetentionDays,
+			"resolution":              cfg.History.Resolution,
+			"persistent":              cfg.History.DataDir != "",
+			"boards_persistent":       reg.Persistent(),
+			"auth_required":           cfg.AdminToken != "",
+			"probe":                   cfg.DDPProbe,
+			"thresholds":              cfg.Thresholds,
+			"temperature_unit":        cfg.TemperatureUnit,
+			"suggested_subnets":       suggestedSubnets(reg),
+			"alerts_enabled":          cfg.notifier.Enabled(),
+			"incident_retention_days": cfg.Incidents.RetentionDays,
+			"recorder_window":         cfg.Incidents.RecorderWindow,
 		})
 	})
 	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, views()) })
@@ -161,6 +167,93 @@ func main() {
 			w.WriteHeader(http.StatusAccepted)
 		}
 	}))
+	incidentBoard := func(w http.ResponseWriter, r *http.Request) (*Board, string) {
+		id := r.PathValue("id")
+		for _, b := range reg.List() {
+			if _, ok := b.Incident(id); ok {
+				return b, id
+			}
+		}
+		httpError(w, http.StatusNotFound, errNoIncident)
+		return nil, id
+	}
+	mux.HandleFunc("GET /api/incidents", func(w http.ResponseWriter, r *http.Request) {
+		var out []Incident
+		for _, b := range reg.List() {
+			if name := r.URL.Query().Get("board"); name != "" && name != b.cfg.Name {
+				continue
+			}
+			out = append(out, b.Incidents()...)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].DetectedAt.After(out[j].DetectedAt) })
+		if out == nil {
+			out = []Incident{}
+		}
+		writeJSON(w, out)
+	})
+	mux.HandleFunc("GET /api/incidents/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if b, id := incidentBoard(w, r); b != nil {
+			inc, _ := b.Incident(id)
+			writeJSON(w, inc)
+		}
+	})
+	mux.HandleFunc("GET /api/incidents/{id}/export", func(w http.ResponseWriter, r *http.Request) {
+		b, id := incidentBoard(w, r)
+		if b == nil {
+			return
+		}
+		exp, _ := b.Export(id)
+		name := fmt.Sprintf("baldrick-%s-%s-%s.json", unsafeChars.ReplaceAllString(exp.Incident.Board, "_"), exp.Incident.Type, exp.Incident.StartedAt.UTC().Format("20060102-150405"))
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", " ")
+		enc.Encode(exp)
+	})
+	mux.HandleFunc("POST /api/incidents/{id}/ack", admin(func(w http.ResponseWriter, r *http.Request) {
+		b, id := incidentBoard(w, r)
+		if b == nil {
+			return
+		}
+		var body struct {
+			Note string `json:"note"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		inc, err := b.SetAck(id, &Ack{At: time.Now(), Note: strings.TrimSpace(body.Note), By: host})
+		if err != nil {
+			httpError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, inc)
+	}))
+	mux.HandleFunc("POST /api/incidents/{id}/reopen", admin(func(w http.ResponseWriter, r *http.Request) {
+		b, id := incidentBoard(w, r)
+		if b == nil {
+			return
+		}
+		inc, err := b.SetAck(id, nil)
+		if err != nil {
+			httpError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, inc)
+	}))
+	mux.HandleFunc("POST /api/boards/{name}/capture", admin(func(w http.ResponseWriter, r *http.Request) {
+		b := board(w, r)
+		if b == nil {
+			return
+		}
+		var body struct {
+			Note string `json:"note"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+		inc := b.Capture(ctx, strings.TrimSpace(body.Note))
+		inc.Timeline = nil
+		writeJSON(w, inc)
+	}))
 	mux.HandleFunc("GET /api/inspect", admin(func(w http.ResponseWriter, r *http.Request) {
 		host := strings.TrimSpace(r.URL.Query().Get("host"))
 		bc := BoardConfig{Host: host}
@@ -214,7 +307,7 @@ func markMonitored(reg *Registry, found []Found) []Found {
 func suggestedSubnets(reg *Registry) []string {
 	var out []string
 	for _, b := range reg.List() {
-		if a, err := netip.ParseAddr(b.cfg.Host); err == nil && a.Is4() {
+		if a, err := netip.ParseAddr(hostOnly(b.cfg.Host)); err == nil && a.Is4() {
 			p, _ := a.Prefix(24)
 			if s := p.String(); !slices.Contains(out, s) {
 				out = append(out, s)

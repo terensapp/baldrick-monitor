@@ -126,13 +126,15 @@ type Board struct {
 	pinger *Pinger
 	client *http.Client
 
-	mu        sync.RWMutex
-	raw       map[string]json.RawMessage
-	st        SystemState
-	haveState bool
-	stateAt   time.Time
-	settings  *Settings
-	fieldAt   map[string]FieldUpdate
+	mu          sync.RWMutex
+	raw         map[string]json.RawMessage
+	st          SystemState
+	haveState   bool
+	stateAt     time.Time
+	settings    *Settings
+	settingsRaw json.RawMessage
+	fieldAt     map[string]FieldUpdate
+	prevRun     *lastState // last state saved by a previous run, until first contact
 
 	icmp               *ring
 	icmpN              int // samples per rollup window
@@ -140,6 +142,8 @@ type Board struct {
 	httpPing           *ring
 	httpN              int
 	pingFails          int
+	firstFailAt        time.Time // first failure of the current /ping failure streak
+	lastHTTPOK         time.Time
 	httpEverOK         bool
 	endpoints          map[string]*EndpointStats
 
@@ -149,13 +153,21 @@ type Board struct {
 	wsMessages   uint64
 	wsErr        string
 
-	reboots     uint64
-	probe       *DDPProbe
-	probeCounts map[string]uint64
-	events      []Event
-	history     []Sample
-	store       *store
-	probeNow    chan struct{}
+	reboots       uint64
+	probe         *DDPProbe
+	probeSkipping bool
+	probeCounts   map[string]uint64
+	events        []Event
+	history       []Sample
+	store         *store
+	probeNow      chan struct{}
+
+	rec          recorder
+	incidents    []*Incident
+	timelines    map[string][]RecPoint // incident timelines when there's no data dir
+	activeLockup *Incident
+	activeDDP    *Incident
+	ddpFails     int
 }
 
 func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
@@ -181,7 +193,11 @@ func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
 		probeCounts: map[string]uint64{},
 		probeNow:    make(chan struct{}, 1),
 		store:       openStore(glob.History.DataDir, cfg.Name, glob.retention()),
+		rec:         recorder{window: glob.Incidents.RecorderWindow.Duration},
+		timelines:   map[string][]RecPoint{},
 	}
+	b.loadIncidents()
+	b.prevRun = b.loadLastState()
 	since := time.Now().Add(-glob.retention())
 	b.events = loadLines(b.store, "events", time.Now(), func(e *Event) bool { return e.Time.After(since) })
 	b.history = loadLines(b.store, "samples", time.Now(), func(s *Sample) bool { return s.T.After(since) })
@@ -231,6 +247,7 @@ func (b *Board) addEvent(level, format string, args ...any) {
 		b.events = b.events[len(b.events)-maxEvents:]
 	}
 	b.store.append("events", e.Time, e)
+	b.rec.add("event", e)
 	log.Printf("[%s] %s: %s", b.cfg.Name, level, e.Msg)
 }
 
@@ -244,10 +261,12 @@ func (b *Board) mergeState(data []byte, src string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := time.Now()
+	prevUptimeAt := b.fieldAt["uptime"].At
 	for k, v := range delta {
 		b.raw[k] = v
 		b.fieldAt[k] = FieldUpdate{Src: src, At: now}
 	}
+	b.rec.add("state", json.RawMessage(fmt.Sprintf(`{"src":%q,"d":%s}`, src, data)))
 	merged, _ := json.Marshal(b.raw)
 	var st SystemState
 	if err := json.Unmarshal(merged, &st); err != nil {
@@ -258,12 +277,22 @@ func (b *Board) mergeState(data []byte, src string) {
 	if !b.haveState {
 		fw, _, _ := st.firmware()
 		b.addEvent("info", "Found %s %s (id %s, firmware %s)", st.BoardManufacturer, st.BoardModel, st.BoardID, fw)
+		// Did it reboot while the monitor wasn't running?
+		if prev := b.prevRun; prev != nil && has("uptime") {
+			b.prevRun = nil
+			if now.Add(-secs(st.Uptime)).Sub(prev.At.Add(-secs(prev.Uptime))) > rebootGrace {
+				b.onReboot(nil, prev, time.Time{}, &st, now)
+			}
+		}
 	} else {
 		old := b.st
-		if has("uptime") && st.Uptime+5 < old.Uptime {
-			b.reboots++
-			b.addEvent("warn", "Reboot detected: uptime went from %s to %s",
-				fmtDur(old.Uptime), fmtDur(st.Uptime))
+		// A reboot shows up as the boot time (now - uptime) jumping forward,
+		// which also catches boards that were down longer than their uptime.
+		if has("uptime") {
+			oldBoot := prevUptimeAt.Add(-secs(old.Uptime))
+			if st.Uptime+5 < old.Uptime || now.Add(-secs(st.Uptime)).Sub(oldBoot) > rebootGrace {
+				b.onReboot(&old, nil, prevUptimeAt, &st, now)
+			}
 		}
 		if has("oom_count") && st.OOMCount > old.OOMCount {
 			b.addEvent("error", "Out-of-memory count rose to %.0f", st.OOMCount)
@@ -320,13 +349,20 @@ func (b *Board) record(name string, r httpResult) {
 	}
 	e.LastStatus, e.LastMs, e.LastTime = r.code, ms(r.elapsed), time.Now()
 	e.LastOK = r.err == nil
+	pt := map[string]any{"ep": name, "ok": r.err == nil, "status": r.code, "ms": ms(r.elapsed)}
 	if r.err != nil {
 		e.Fail++
 		e.LastErr = r.err.Error()
+		pt["err"] = r.err.Error()
+		if r.code >= 400 && len(r.body) > 0 {
+			pt["body"] = bodySnippet(r.body)
+			e.LastErr += ": " + truncate(bodySnippet(r.body), 120)
+		}
 	} else {
 		e.OK++
 		e.LastErr = ""
 	}
+	b.rec.add("http", pt)
 }
 
 func (b *Board) checkPing(ctx context.Context) {
@@ -336,21 +372,35 @@ func (b *Board) checkPing(ctx context.Context) {
 	}
 	b.record("/ping", r)
 	down := b.glob.Thresholds.HTTPFailDown
+	now := time.Now()
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	if r.err != nil {
 		b.httpPing.add(math.NaN())
 		b.pingFails++
-		if b.pingFails == down {
-			b.addEvent("error", "HTTP not responding (%d consecutive /ping failures): %v", down, r.err)
+		if b.pingFails == 1 {
+			b.firstFailAt = now.Add(-r.elapsed)
+		}
+		start := b.pingFails == down
+		b.mu.Unlock()
+		if start {
+			b.startLockup(ctx, r.err)
 		}
 		return
 	}
 	b.httpPing.add(ms(r.elapsed))
-	if b.pingFails >= down {
-		b.addEvent("info", "HTTP recovered after %d failed checks", b.pingFails)
+	b.pingFails, b.httpEverOK, b.lastHTTPOK = 0, true, now
+	lockedUp := b.activeLockup != nil
+	b.mu.Unlock()
+	if lockedUp {
+		// Read the state first so a reboot during the lockup is noticed
+		// before the recovery is described.
+		b.fetchState(ctx)
+		b.mu.Lock()
+		b.endLockup(now)
+		b.mu.Unlock()
+		b.checkPage(ctx) // clear stale endpoint failures right away
+		b.checkSettings(ctx)
 	}
-	b.pingFails, b.httpEverOK = 0, true
 }
 
 func (b *Board) fetchState(ctx context.Context) (*SystemState, error) {
@@ -398,7 +448,7 @@ func (b *Board) checkSettings(ctx context.Context) {
 	b.record("/settings", r)
 	if r.err == nil {
 		b.mu.Lock()
-		b.settings = &s
+		b.settings, b.settingsRaw = &s, r.body
 		b.mu.Unlock()
 	}
 }
@@ -444,14 +494,16 @@ func (b *Board) icmpLoop(ctx context.Context) {
 	t := time.NewTicker(b.glob.Intervals.ICMP.Duration)
 	defer t.Stop()
 	for {
-		rtt, err := b.pinger.Ping(b.cfg.Host, time.Second)
+		rtt, err := b.pinger.Ping(hostOnly(b.cfg.Host), time.Second)
 		b.mu.Lock()
 		b.icmpSent++
 		if err != nil {
 			b.icmpLost++
 			b.icmp.add(math.NaN())
+			b.rec.add("icmp", map[string]bool{"lost": true})
 		} else {
 			b.icmp.add(ms(rtt))
+			b.rec.add("icmp", map[string]float64{"ms": ms(rtt)})
 		}
 		b.mu.Unlock()
 		select {
@@ -477,6 +529,7 @@ func (b *Board) wsLoop(ctx context.Context) {
 		}
 		b.mu.Lock()
 		b.wsConnected, b.wsLastMsg, b.wsErr = true, time.Now(), ""
+		b.rec.add("ws", map[string]any{"connected": true})
 		if !first {
 			b.wsReconnects++
 			b.addEvent("info", "WebSocket reconnected")
@@ -538,6 +591,7 @@ func (b *Board) wsLoop(ctx context.Context) {
 		}
 		b.mu.Lock()
 		b.wsConnected, b.wsErr = false, rerr.Error()
+		b.rec.add("ws", map[string]any{"connected": false, "err": rerr.Error()})
 		b.addEvent("warn", "WebSocket lost: %v", rerr)
 		b.mu.Unlock()
 		sleepCtx(ctx, 2*time.Second)
@@ -592,7 +646,7 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 		b.finishProbe(res)
 		return
 	}
-	local := localIP(b.cfg.Host)
+	local := localIP(hostOnly(b.cfg.Host))
 	var foreign []string
 	for _, s := range st.Streaming.DDPSources {
 		if s != local {
@@ -609,13 +663,16 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 		return
 	}
 
-	conn, err := net.Dial("udp", net.JoinHostPort(b.cfg.Host, "4048"))
+	conn, err := net.Dial("udp", net.JoinHostPort(hostOnly(b.cfg.Host), "4048"))
 	if err != nil {
 		res.Note = "cannot open UDP socket: " + err.Error()
 		b.finishProbe(res)
 		return
 	}
 	defer conn.Close()
+	b.mu.Lock()
+	b.rec.add("probe_start", map[string]any{"offset": pc.Offset, "packets": pc.Packets, "rate": pc.Rate})
+	b.mu.Unlock()
 	gap := time.Duration(float64(time.Second) / pc.Rate)
 	sent := make(chan int, 1)
 	go func() {
@@ -630,11 +687,15 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	}()
 	start := time.Now()
 	deadline := start.Add(time.Duration(pc.Packets)*gap + 7*time.Second)
+	polled := 0
+	var pollErr error
 	for time.Now().Before(deadline) && sleepCtx(ctx, 500*time.Millisecond) {
 		st, err := b.fetchState(ctx)
 		if err != nil {
+			pollErr = err
 			continue
 		}
+		polled++
 		if st.Streaming.DDPRecvd > 0 {
 			res.OK = true
 			res.DetectMs = ms(time.Since(start))
@@ -643,6 +704,12 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 		}
 	}
 	res.Sent = <-sent
+	if !res.OK && polled == 0 && pollErr != nil {
+		// Never saw the counters, so this says nothing about DDP.
+		res.Note = "cannot read system_state: " + pollErr.Error()
+		b.finishProbe(res)
+		return
+	}
 	if res.OK {
 		res.Note = fmt.Sprintf("board counted our DDP packets after %.1fs", res.DetectMs/1000)
 	} else {
@@ -654,8 +721,20 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 func (b *Board) finishProbe(res DDPProbe) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.rec.add("probe", res)
+	// A check that couldn't run (HTTP down) says nothing about DDP; keep
+	// the last real result and log the first skip of a streak only.
+	if strings.HasPrefix(res.Note, "cannot ") {
+		if !b.probeSkipping {
+			b.addEvent("warn", "DDP check skipped: %s", res.Note)
+		}
+		b.probeSkipping = true
+		return
+	}
+	b.probeSkipping = false
 	prev := b.probe
 	b.probe = &res
+	b.noteDDP(res)
 	key := "fail"
 	if res.OK {
 		key = "ok"
@@ -741,6 +820,10 @@ type BoardView struct {
 	ProbeCounts       map[string]uint64 `json:"probe_counts"`
 
 	Events []Event `json:"events"`
+
+	// Incidents still alerting (not acknowledged), newest first.
+	Incidents     []Incident `json:"incidents"`
+	IncidentTotal int        `json:"incident_total"`
 }
 
 func (b *Board) View() BoardView {
@@ -808,6 +891,12 @@ func (b *Board) View() BoardView {
 	for i := len(b.events) - 1; i >= 0 && len(v.Events) < 15; i-- {
 		v.Events = append(v.Events, b.events[i])
 	}
+	for i := len(b.incidents) - 1; i >= 0; i-- {
+		if inc := b.incidents[i]; inc.Alerting() {
+			v.Incidents = append(v.Incidents, *inc)
+		}
+	}
+	v.IncidentTotal = len(b.incidents)
 	v.Status, v.Reasons = b.health(&v)
 	return v
 }
@@ -866,6 +955,23 @@ func (b *Board) health(v *BoardView) (string, []string) {
 	if v.UIMessages > 0 {
 		warn = append(warn, fmt.Sprintf("%d board UI message(s)", v.UIMessages))
 	}
+	var unacked []Incident
+	for _, inc := range v.Incidents {
+		switch {
+		case inc.Ongoing && inc.Type == "lockup":
+			down = append(down, fmt.Sprintf("%s since %s ago", inc.Title, agoText(inc.StartedAt)))
+		case inc.Ongoing:
+			warn = append(warn, fmt.Sprintf("%s since %s ago", inc.Title, agoText(inc.StartedAt)))
+		default:
+			unacked = append(unacked, inc)
+		}
+	}
+	switch n := len(unacked); {
+	case n == 1:
+		warn = append(warn, fmt.Sprintf("%s %s ago, not acknowledged", unacked[0].Title, agoText(unacked[0].StartedAt)))
+	case n > 1:
+		warn = append(warn, fmt.Sprintf("%d incidents not acknowledged (latest: %s, %s ago)", n, unacked[0].Title, agoText(unacked[0].StartedAt)))
+	}
 	switch {
 	case len(down) > 0:
 		return "down", append(down, warn...)
@@ -901,6 +1007,10 @@ func localIP(host string) string {
 	return c.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
+func agoText(t time.Time) string {
+	return time.Since(t).Round(time.Second).String()
+}
+
 func fmtDur(sec float64) string {
 	return (time.Duration(sec) * time.Second).String()
 }
@@ -926,6 +1036,7 @@ func (b *Board) rollupLoop(ctx context.Context) {
 			return
 		case <-prune.C:
 			b.store.prune(time.Now())
+			b.pruneIncidents()
 		case <-t.C:
 			s := b.View().sample()
 			cutoff := time.Now().Add(-b.glob.retention())
@@ -943,6 +1054,7 @@ func (b *Board) rollupLoop(ctx context.Context) {
 			b.events = b.events[j:]
 			b.mu.Unlock()
 			b.store.append("samples", s.T, s)
+			b.saveLastState()
 		}
 	}
 }

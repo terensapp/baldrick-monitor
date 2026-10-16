@@ -128,6 +128,17 @@ func writeMetrics(w io.Writer, views []BoardView) {
 		}
 		ctr("reboots_detected_total", "Reboots detected from uptime going backwards.", float64(v.Reboots), n)
 
+		open, ongoing := map[string]int{}, map[string]int{}
+		for _, inc := range v.Incidents {
+			open[inc.Type]++
+			if inc.Ongoing {
+				ongoing[inc.Type]++
+			}
+		}
+		for _, t := range []string{"reboot", "lockup", "ddp"} {
+			g("incidents_unacknowledged", "Incidents not yet acknowledged.", float64(open[t]), n, "type", t)
+			g("incidents_ongoing", "Incidents still in progress (e.g. a lockup).", float64(ongoing[t]), n, "type", t)
+		}
 		ctr("ddp_probe_total", "DDP checks by result.", float64(v.ProbeCounts["ok"]), n, "result", "ok")
 		ctr("ddp_probe_total", "DDP checks by result.", float64(v.ProbeCounts["fail"]), n, "result", "fail")
 		if p := v.Probe; p != nil {

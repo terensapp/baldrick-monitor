@@ -24,7 +24,7 @@ type wsConn struct {
 }
 
 func wsDial(host string, timeout time.Duration) (*wsConn, error) {
-	c, err := net.DialTimeout("tcp", net.JoinHostPort(host, "80"), timeout)
+	c, err := net.DialTimeout("tcp", httpAddr(host), timeout)
 	if err != nil {
 		return nil, err
 	}

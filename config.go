@@ -3,10 +3,28 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// A board address is "host" or "host:port". The port applies to HTTP and
+// the WebSocket only; ICMP and DDP always go to the host itself.
+func hostOnly(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		return h
+	}
+	return addr
+}
+
+func httpAddr(addr string) string {
+	if _, _, err := net.SplitHostPort(addr); err == nil {
+		return addr
+	}
+	return net.JoinHostPort(addr, "80")
+}
 
 // Duration accepts Go duration strings ("5s", "1m") in JSON.
 type Duration struct{ time.Duration }
@@ -68,6 +86,21 @@ type Thresholds struct {
 	RAMMinWarnBytes float64 `json:"ram_min_warn_bytes"`
 }
 
+type IncidentsConfig struct {
+	RetentionDays int `json:"retention_days"`
+	// How much raw telemetry before an incident goes into its export.
+	RecorderWindow Duration `json:"recorder_window"`
+}
+
+type AlertsConfig struct {
+	// Webhook to POST alerts to (reboots, lockups, DDP failures, recoveries).
+	WebhookURL string `json:"webhook_url"`
+	// json (default), ntfy, discord or slack.
+	Format string `json:"format"`
+	// Public URL of this dashboard, for links in alerts.
+	DashboardURL string `json:"dashboard_url"`
+}
+
 type Config struct {
 	Listen string `json:"listen"`
 	// If set, changing boards or triggering probes requires
@@ -75,12 +108,15 @@ type Config struct {
 	AdminToken string `json:"admin_token,omitempty"`
 	// Display unit for temperatures: "F" (default) or "C". Thresholds and
 	// Prometheus metrics stay in Celsius.
-	TemperatureUnit string        `json:"temperature_unit"`
-	Boards          []BoardConfig `json:"boards"`
-	Intervals       Intervals     `json:"intervals"`
-	DDPProbe        ProbeConfig   `json:"ddp_probe"`
-	History         HistoryConfig `json:"history"`
-	Thresholds      Thresholds    `json:"thresholds"`
+	TemperatureUnit string          `json:"temperature_unit"`
+	Boards          []BoardConfig   `json:"boards"`
+	Intervals       Intervals       `json:"intervals"`
+	DDPProbe        ProbeConfig     `json:"ddp_probe"`
+	History         HistoryConfig   `json:"history"`
+	Incidents       IncidentsConfig `json:"incidents"`
+	Alerts          AlertsConfig    `json:"alerts"`
+	notifier        *Notifier
+	Thresholds      Thresholds `json:"thresholds"`
 }
 
 func loadConfig(path, listen, boards, dataDir string) (*Config, error) {
@@ -145,6 +181,11 @@ func (c *Config) applyDefaults() {
 		c.History.RetentionDays = 7
 	}
 	def(&c.History.Resolution, time.Minute)
+	if c.Incidents.RetentionDays <= 0 {
+		c.Incidents.RetentionDays = 90
+	}
+	def(&c.Incidents.RecorderWindow, 30*time.Minute)
+	c.notifier = NewNotifier(c.Alerts)
 	t := &c.Thresholds
 	if t.HTTPFailDown <= 0 {
 		t.HTTPFailDown = 3
@@ -170,6 +211,9 @@ func (c *Config) validate() error {
 	if c.TemperatureUnit != "F" && c.TemperatureUnit != "C" {
 		return fmt.Errorf("temperature_unit must be F or C, got %q", c.TemperatureUnit)
 	}
+	if err := validFormat(c.Alerts.Format); err != nil {
+		return err
+	}
 	if err := validMode(c.DDPProbe.Mode); err != nil {
 		return err
 	}
@@ -184,6 +228,14 @@ func (c *Config) validate() error {
 		seen[c.Boards[i].Name] = true
 	}
 	return nil
+}
+
+func validFormat(f string) error {
+	switch f {
+	case "", "json", "ntfy", "discord", "slack":
+		return nil
+	}
+	return fmt.Errorf("alerts.format must be json, ntfy, discord or slack, got %q", f)
 }
 
 func validMode(m string) error {
@@ -201,8 +253,14 @@ func normalizeBoard(b *BoardConfig) error {
 	if b.Host == "" {
 		return fmt.Errorf("board %q has no host", b.Name)
 	}
-	if strings.ContainsAny(b.Host, "/:@ ") {
-		return fmt.Errorf("host %q should be a bare IP or hostname", b.Host)
+	if strings.ContainsAny(b.Host, "/@ ") {
+		return fmt.Errorf("host %q should be an IP or hostname, optionally with :port", b.Host)
+	}
+	if strings.Contains(b.Host, ":") {
+		_, port, err := net.SplitHostPort(b.Host)
+		if n, perr := strconv.Atoi(port); err != nil || perr != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("host %q should be an IP or hostname, optionally with :port", b.Host)
+		}
 	}
 	if b.Name == "" {
 		b.Name = b.Host

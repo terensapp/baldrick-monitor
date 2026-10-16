@@ -63,6 +63,53 @@ Events are logged when any of these happen:
 - a WebSocket drop;
 - a DDP check failure or recovery.
 
+## Incidents: reboots, lockups and DDP failures
+
+When something goes wrong, the monitor opens an **incident** and keeps the
+telemetry that led up to it. It keeps a rolling raw recorder (default 30
+minutes) of every ping, HTTP check (including error bodies), WebSocket state
+update, DDP check and event.
+
+| Incident | Detected when | What it captures |
+|---|---|---|
+| **Stopped responding** (lockup) | `/ping` fails `http_fail_down` times in a row (503s, timeouts, refused) | An immediate diagnostic sweep (TCP connect; every endpoint's status and error page; 5 pings) to separate "web server up but the firmware refuses (503)", "network stack alive but HTTP hung" and "nothing answers (power/network)". It stays open until HTTP works again and records whether it recovered on its own or only after a reboot. |
+| **Reboot** | The board's boot time (now − uptime) jumps forward, including reboots that happened while the monitor was down | Classified as *unexpected*, *firmware update* or *after a settings change* (the last two are auto-acknowledged). Findings cover how the board went quiet (instant crash vs hang vs long outage), memory and leak trends, temperature, active streams, crash loops, and any message the board shows after booting. |
+| **Not processing DDP** | Two DDP checks in a row fail while HTTP still works | The probe results and the board's stream counters. |
+| **Manual capture** | **Collect diagnostics now** in a board's ••• menu | The recorder plus a fresh sweep. Use it the moment something looks off. |
+
+An incident keeps the board **degraded** until you **Acknowledge** it, with
+an optional note, from the card banner, the **Incidents** list or the detail
+view. **Export telemetry** downloads a JSON bundle containing:
+
+- a readable summary;
+- the full raw timeline;
+- two hours of rollups and events;
+- the board's settings;
+- the monitor configuration.
+
+Attach it to a bug report. Incidents are kept `incidents.retention_days`
+(default 90) under `<data_dir>/<board>/incidents/`.
+
+The board's firmware doesn't expose a reset reason, so the "likely cause" is
+inferred from these observations. A reboot started from the board's own web
+UI looks the same as a crash.
+
+### Alerts
+
+```json
+"alerts": {
+  "webhook_url": "https://ntfy.sh/my-baldrick-alerts",
+  "format": "ntfy",
+  "dashboard_url": "http://srv:8420"
+}
+```
+
+`format` is `json` (default; POSTs the alert object), `ntfy`, `discord` or
+`slack`. Alerts fire for unexpected reboots, lockups, DDP failures and their
+recoveries, with a link straight to the incident. Prometheus also gets
+`baldrick_incidents_unacknowledged{type}` and
+`baldrick_incidents_ongoing{type}`.
+
 ## Managing boards
 
 Add, edit and remove boards from the dashboard. Changes apply right away,
@@ -98,6 +145,24 @@ stats and appends them to `<data_dir>/<board>/samples-YYYY-MM-DD.jsonl`.
 Events go to `events-YYYY-MM-DD.jsonl`. Files older than
 `history.retention_days` (default 7) are deleted. History is reloaded on
 restart. Without a `data_dir`, history is kept in memory only.
+
+## Testing without hardware
+
+`cmd/fakeboard` imitates a board's HTTP, WebSocket and DDP interfaces and can
+simulate failures:
+
+```bash
+go run ./cmd/fakeboard &                       # http://127.0.0.1:8081, DDP on 127.0.0.1:4048
+go run . -boards 127.0.0.1:8081
+curl -XPOST 'localhost:8081/_sim/hang?secs=60'  # 503 lockup (add &reboot=1 to end in a reboot)
+curl -XPOST localhost:8081/_sim/crash           # sudden crash + reboot
+curl -XPOST localhost:8081/_sim/leak            # heap drains until it crashes
+curl -XPOST localhost:8081/_sim/ddpstall        # stops counting DDP
+curl -XPOST localhost:8081/_sim/reset
+```
+
+A board address can include a port (`host:port`). The port applies to HTTP
+and the WebSocket; ICMP and DDP always go to the host.
 
 ## Running
 
