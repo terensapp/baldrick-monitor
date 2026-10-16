@@ -44,7 +44,8 @@ for _ in $(seq 1 45); do
 	sleep 2
 	if curl -fsS -m 2 "$HEALTH_URL" >/dev/null 2>&1; then
 		status done "Updated"
-		podman image prune -f >/dev/null 2>&1
+		# Drop only the image we replaced; leave every other image alone.
+		[ -n "$old" ] && podman rmi "$old" >/dev/null 2>&1
 		exit 0
 	fi
 done
