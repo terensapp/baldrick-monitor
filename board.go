@@ -846,7 +846,7 @@ func (b *Board) health(v *BoardView) (string, []string) {
 	}
 	for _, t := range v.Temperature {
 		if t > th.TempWarnC {
-			warn = append(warn, fmt.Sprintf("temperature %.0f°C", t))
+			warn = append(warn, "temperature "+b.glob.fmtTemp(t))
 		}
 	}
 	if v.HaveState && v.RAMMinimum > 0 && v.RAMMinimum < th.RAMMinWarnBytes {

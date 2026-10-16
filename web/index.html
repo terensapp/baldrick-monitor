@@ -81,6 +81,10 @@ const ICON = {polled: "↻", streamed: "≋", derived: "Σ"};
 const f1 = x => x == null || isNaN(x) ? "–" : (x >= 100 ? x.toFixed(0) : x.toFixed(1));
 const msf = x => x == null ? "–" : f1(x) + " ms";
 const pct = x => x == null ? "–" : (x * 100).toFixed(x > 0 && x < 0.1 ? 1 : 0) + "%";
+// Board reports Celsius; show in the configured unit (default °F).
+const tUnit = () => META?.temperature_unit === "C" ? "C" : "F";
+const toUnit = c => c == null ? null : tUnit() === "C" ? c : c * 9 / 5 + 32;
+const temp = c => c == null ? "–" : f1(toUnit(c)) + " °" + tUnit();
 const kb = x => x == null ? "–" : (x / 1024).toFixed(0) + " KB";
 function dur(s) {
   if (s == null) return "–";
@@ -189,7 +193,7 @@ function strip(samples, t0, t1) {
 
 // ---------- rendering ----------
 function live(b) {
-  const p = b.probe, temp = b.temperature?.[0];
+  const p = b.probe, tc = b.temperature?.[0];
   const dropRatio = b.ddp.recvd + b.ddp.dropped ? b.ddp.dropped / (b.ddp.recvd + b.ddp.dropped) : null;
   const ep = (path, label) => {
     const e = b.endpoints?.[path];
@@ -244,7 +248,8 @@ function live(b) {
 
   <h3>Board</h3>
   <div class="grid">
-    ${stat("Temperature", temp != null ? f1(temp) + " °C" : "–", "board", {field: "temperature", color: temp > (META?.thresholds?.temp_warn_c ?? 70) ? "degraded" : null})}
+    ${stat("Temperature", temp(tc), "board", {field: "temperature", color: tc > (META?.thresholds?.temp_warn_c ?? 70) ? "degraded" : null,
+      extra: tc != null ? `${f1(tc)} °C / ${f1(tc * 9 / 5 + 32)} °F · warn above ${temp(META?.thresholds?.temp_warn_c ?? 70)}` : ""})}
     ${stat("Uptime", dur(b.uptime), "board", {field: "uptime", extra: `${b.reboots} reboot(s) detected while monitoring`})}
     ${stat("RAM free", kb(b.ram_available), "board", {field: "ram_available"})}
     ${stat("RAM low-water", kb(b.ram_minimum), "board", {field: "ram_minimum", extra: `Lowest free heap since boot · largest block ${kb(b.ram_largest_block)} · OOM count ${b.oom_count}`})}
@@ -271,7 +276,7 @@ function historyBlock(name) {
     <div class="charts">
       <div class="chart">${chart(s, [{key: "icmp_p95", label: "ICMP p95", color: "s1"}, {key: "http_p95", label: "HTTP p95", color: "s2"}], v => f1(v) + " ms", t0, t1)}</div>
       <div class="chart">${chart(s, [{key: "icmp_loss", label: "ICMP loss", color: "s1", scale: 100}, {key: "http_loss", label: "HTTP fail", color: "s2", scale: 100}, {key: "ws_down", label: "WS down", color: "down", scale: 100}], v => f1(v) + "%", t0, t1)}</div>
-      <div class="chart">${chart(s, [{key: "temp", label: "Temp °C", color: "degraded"}], v => f1(v) + " °C", t0, t1)}</div>
+      <div class="chart">${chart(s.map(x => x.v?.temp == null ? x : {...x, v: {...x.v, temp: toUnit(x.v.temp)}}), [{key: "temp", label: "Temp °" + tUnit(), color: "degraded"}], v => f1(v) + " °" + tUnit(), t0, t1)}</div>
       <div class="chart">${chart(s, [{key: "fps", label: "Frame rate", color: "s3"}, {key: "ddp_dropped", label: "DDP dropped", color: "down"}], f1, t0, t1)}</div>
     </div>
     <h3>Events (${ev.length}${(h.events || []).length > ev.length ? "+" : ""})</h3>

@@ -17,6 +17,9 @@ metrics. It is a single static Go binary with no dependencies.
 | Board state (uptime, temp, RAM, OOM, firmware, frame rate, stream counters, FPP peers) | WebSocket `/ws` (subprotocol `baldrick`); the board pushes deltas, and we send the same `{}` keepalive as its UI | streamed, with the `/system_state` poll as a backstop |
 | DDP processing | see below | polled (`intervals.ddp_probe`, 1m) |
 
+Temperatures are shown in °F by default (`"temperature_unit": "C"` to switch).
+Thresholds (`temp_warn_c`) and Prometheus metrics stay in Celsius.
+
 Every value on the dashboard has a hover tooltip. It says whether the value is
 polled (↻) or streamed (≋), how often it is collected, and when it last changed
 and how: WebSocket push or poll.

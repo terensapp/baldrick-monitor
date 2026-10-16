@@ -1,5 +1,6 @@
 {
   "listen": ":8420",
+  "temperature_unit": "F",
   "boards": [
     { "name": "pixel1", "host": "192.168.6.4" }
   ],

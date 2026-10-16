@@ -67,13 +67,14 @@ func main() {
 	})
 	mux.HandleFunc("GET /api/meta", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
-			"sources":        cfg.sources(),
-			"intervals":      cfg.Intervals,
-			"retention_days": cfg.History.RetentionDays,
-			"resolution":     cfg.History.Resolution,
-			"persistent":     cfg.History.DataDir != "",
-			"probe":          cfg.DDPProbe,
-			"thresholds":     cfg.Thresholds,
+			"sources":          cfg.sources(),
+			"intervals":        cfg.Intervals,
+			"retention_days":   cfg.History.RetentionDays,
+			"resolution":       cfg.History.Resolution,
+			"persistent":       cfg.History.DataDir != "",
+			"probe":            cfg.DDPProbe,
+			"thresholds":       cfg.Thresholds,
+			"temperature_unit": cfg.TemperatureUnit,
 		})
 	})
 	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, views()) })

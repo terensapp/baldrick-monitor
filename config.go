@@ -69,12 +69,15 @@ type Thresholds struct {
 }
 
 type Config struct {
-	Listen     string        `json:"listen"`
-	Boards     []BoardConfig `json:"boards"`
-	Intervals  Intervals     `json:"intervals"`
-	DDPProbe   ProbeConfig   `json:"ddp_probe"`
-	History    HistoryConfig `json:"history"`
-	Thresholds Thresholds    `json:"thresholds"`
+	Listen string `json:"listen"`
+	// Display unit for temperatures: "F" (default) or "C". Thresholds and
+	// Prometheus metrics stay in Celsius.
+	TemperatureUnit string        `json:"temperature_unit"`
+	Boards          []BoardConfig `json:"boards"`
+	Intervals       Intervals     `json:"intervals"`
+	DDPProbe        ProbeConfig   `json:"ddp_probe"`
+	History         HistoryConfig `json:"history"`
+	Thresholds      Thresholds    `json:"thresholds"`
 }
 
 func loadConfig(path, listen, boards, dataDir string) (*Config, error) {
@@ -111,6 +114,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Listen == "" {
 		c.Listen = ":8420"
+	}
+	c.TemperatureUnit = strings.ToUpper(c.TemperatureUnit)
+	if c.TemperatureUnit == "" {
+		c.TemperatureUnit = "F"
 	}
 	iv := &c.Intervals
 	def(&iv.ICMP, time.Second)
@@ -162,6 +169,9 @@ func (c *Config) applyDefaults() {
 }
 
 func (c *Config) validate() error {
+	if c.TemperatureUnit != "F" && c.TemperatureUnit != "C" {
+		return fmt.Errorf("temperature_unit must be F or C, got %q", c.TemperatureUnit)
+	}
 	if len(c.Boards) == 0 {
 		return fmt.Errorf("no boards configured (use -config or -boards)")
 	}
@@ -183,6 +193,14 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+// fmtTemp renders a Celsius reading in the configured display unit.
+func (c *Config) fmtTemp(celsius float64) string {
+	if c.TemperatureUnit == "C" {
+		return fmt.Sprintf("%.0f°C", celsius)
+	}
+	return fmt.Sprintf("%.0f°F", celsius*9/5+32)
 }
 
 func (c *Config) retention() time.Duration {
