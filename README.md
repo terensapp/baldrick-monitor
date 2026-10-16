@@ -94,21 +94,54 @@ The board's firmware doesn't expose a reset reason, so the "likely cause" is
 inferred from these observations. A reboot started from the board's own web
 UI looks the same as a crash.
 
-### Alerts
+### Notifications
 
-```json
-"alerts": {
-  "webhook_url": "https://ntfy.sh/my-baldrick-alerts",
-  "format": "ntfy",
-  "dashboard_url": "http://srv:8420"
-}
-```
+Set these up in **⚙ Settings → Notifications**. Add any number of channels:
 
-`format` is `json` (default; POSTs the alert object), `ntfy`, `discord` or
-`slack`. Alerts fire for unexpected reboots, lockups, DDP failures and their
-recoveries, with a link straight to the incident. Prometheus also gets
-`baldrick_incidents_unacknowledged{type}` and
+| Channel | What you need |
+|---|---|
+| **Discord** | A channel webhook URL (Server Settings → Integrations → Webhooks). Alerts arrive as color-coded embeds. |
+| **Slack** | An incoming-webhook URL. Alerts arrive as formatted messages with a link. |
+| **Email** | Any SMTP server (STARTTLS, TLS or plain), optional login, one or more recipients. |
+| **ntfy** | A topic URL such as `https://ntfy.sh/your-random-topic` (or a self-hosted server, with an optional token). It's free push to the ntfy phone app. |
+| **Webhook** | Any URL. The alert is POSTed as JSON. |
+
+Each channel picks its events: **stopped responding**, **unexpected
+reboot**, **DDP failure**, **recovered**, and optionally **monitor update
+available**. **Send test** checks a channel before you save. Repeats of the
+same event for the same board are held back for 2 minutes, so a flapping
+board doesn't flood you. Set the **dashboard URL** so alerts link straight
+to the incident.
+
+Prometheus also gets `baldrick_incidents_unacknowledged{type}` and
 `baldrick_incidents_ongoing{type}`.
+
+## Settings
+
+**⚙ Settings** in the header covers what you'd otherwise edit in the config
+file:
+
+- **Notifications:** channels, events, the dashboard URL.
+- **Monitoring:** every polling interval, the default DDP check mode, the
+  probe offset and burst.
+- **Alert rules:** down-after-N-failures, loss and latency warnings,
+  temperature (in °F or °C) and low-memory thresholds, the display unit.
+- **Data:** history and incident retention, rollup resolution, the
+  telemetry kept per incident.
+- **Access & updates:** set, rotate or remove the admin token; the update
+  check interval.
+
+Notifications, rules and access apply immediately. Monitoring and data
+changes restart the board monitors for a moment. History, incidents and
+ongoing lockups carry over, but the raw incident recorder starts over.
+
+Settings are saved to `<data_dir>/settings.json` (mode 0600, since it holds
+webhook URLs and passwords). They override the same keys in the config file;
+delete the file to fall back to the config file. Secrets are never sent back
+to the browser. Saved values show as "saved", and leaving the field blank
+keeps them. Values are range-checked, so you can't set, say, a 1 ms ping.
+
+The listen address and data directory stay in the config file.
 
 ## Managing boards
 

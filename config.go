@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -40,6 +43,18 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 }
 
 func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+
+// String drops zero units: 6h rather than 6h0m0s.
+func (d Duration) String() string {
+	s := d.Duration.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
+}
 
 type BoardConfig struct {
 	Name string `json:"name"`
@@ -114,11 +129,40 @@ type Config struct {
 	DDPProbe        ProbeConfig     `json:"ddp_probe"`
 	History         HistoryConfig   `json:"history"`
 	Incidents       IncidentsConfig `json:"incidents"`
-	Alerts          AlertsConfig    `json:"alerts"`
-	Updates         UpdatesConfig   `json:"updates"`
-	notifier        *Notifier
-	Thresholds      Thresholds `json:"thresholds"`
+	// Where alerts go. The older single-webhook "alerts" block is still
+	// read and becomes one channel.
+	Notifications []Channel     `json:"notifications"`
+	Alerts        AlertsConfig  `json:"alerts"`
+	DashboardURL  string        `json:"dashboard_url"`
+	Updates       UpdatesConfig `json:"updates"`
+	Thresholds    Thresholds    `json:"thresholds"`
+
+	live *liveHolder // settings applied without restarting monitoring
 }
+
+// liveSettings can change while boards are being monitored; every copy of
+// a Config shares one holder.
+type liveSettings struct {
+	thresholds Thresholds
+	unit       string
+	token      string
+	notifier   *Notifier
+}
+
+type liveHolder struct{ atomic.Pointer[liveSettings] }
+
+func (c *Config) publishLive() {
+	if c.live == nil {
+		c.live = &liveHolder{}
+	}
+	c.live.Store(&liveSettings{thresholds: c.Thresholds, unit: c.TemperatureUnit, token: c.AdminToken,
+		notifier: NewNotifier(slices.Clone(c.Notifications), c.DashboardURL)})
+}
+
+func (c *Config) th() Thresholds    { return c.live.Load().thresholds }
+func (c *Config) unit() string      { return c.live.Load().unit }
+func (c *Config) token() string     { return c.live.Load().token }
+func (c *Config) notify() *Notifier { return c.live.Load().notifier }
 
 func loadConfig(path, listen, boards, dataDir string) (*Config, error) {
 	cfg := &Config{}
@@ -143,7 +187,11 @@ func loadConfig(path, listen, boards, dataDir string) (*Config, error) {
 		}
 	}
 	cfg.applyDefaults()
-	return cfg, cfg.validate()
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	cfg.publishLive()
+	return cfg, nil
 }
 
 func (c *Config) applyDefaults() {
@@ -187,7 +235,16 @@ func (c *Config) applyDefaults() {
 	}
 	def(&c.Incidents.RecorderWindow, 30*time.Minute)
 	def(&c.Updates.CheckInterval, 6*time.Hour)
-	c.notifier = NewNotifier(c.Alerts)
+	if c.DashboardURL == "" {
+		c.DashboardURL = c.Alerts.DashboardURL
+	}
+	if len(c.Notifications) == 0 && c.Alerts.WebhookURL != "" {
+		typ := c.Alerts.Format
+		if typ == "" || typ == "json" {
+			typ = "webhook"
+		}
+		c.Notifications = []Channel{{ID: "legacy", Name: "Webhook", Type: typ, Enabled: true, URL: c.Alerts.WebhookURL}}
+	}
 	t := &c.Thresholds
 	if t.HTTPFailDown <= 0 {
 		t.HTTPFailDown = 3
@@ -215,6 +272,19 @@ func (c *Config) validate() error {
 	}
 	if err := validFormat(c.Alerts.Format); err != nil {
 		return err
+	}
+	if err := c.validateRanges(); err != nil {
+		return err
+	}
+	ids := map[string]bool{}
+	for i := range c.Notifications {
+		if err := c.Notifications[i].normalize(); err != nil {
+			return err
+		}
+		if ids[c.Notifications[i].ID] {
+			c.Notifications[i].ID = newChannelID()
+		}
+		ids[c.Notifications[i].ID] = true
 	}
 	if err := validMode(c.DDPProbe.Mode); err != nil {
 		return err
@@ -273,9 +343,47 @@ func normalizeBoard(b *BoardConfig) error {
 	return validMode(b.DDPProbe)
 }
 
+// validateRanges rejects values that would hammer a board or the disk.
+func (c *Config) validateRanges() error {
+	iv := c.Intervals
+	for _, r := range []struct {
+		name      string
+		d, lo, hi time.Duration
+	}{
+		{"ICMP interval", iv.ICMP.Duration, 200 * time.Millisecond, time.Hour},
+		{"HTTP /ping interval", iv.HTTPPing.Duration, time.Second, time.Hour},
+		{"system_state interval", iv.SystemState.Duration, time.Second, time.Hour},
+		{"web UI check interval", iv.WebUI.Duration, 5 * time.Second, 24 * time.Hour},
+		{"settings check interval", iv.Settings.Duration, 10 * time.Second, 24 * time.Hour},
+		{"DDP check interval", iv.DDPProbe.Duration, 10 * time.Second, 24 * time.Hour},
+		{"history resolution", c.History.Resolution.Duration, 10 * time.Second, time.Hour},
+		{"incident recorder window", c.Incidents.RecorderWindow.Duration, time.Minute, 6 * time.Hour},
+		{"update check interval", c.Updates.CheckInterval.Duration, 5 * time.Minute, 30 * 24 * time.Hour},
+	} {
+		if r.d < r.lo || r.d > r.hi {
+			return fmt.Errorf("%s must be between %s and %s", r.name, r.lo, r.hi)
+		}
+	}
+	if c.History.RetentionDays > 3650 || c.Incidents.RetentionDays > 3650 {
+		return errors.New("retention is limited to 3650 days")
+	}
+	t := c.Thresholds
+	if t.ICMPLossWarn > 1 || t.DDPLossWarn > 1 {
+		return errors.New("loss thresholds are fractions between 0 and 1")
+	}
+	if t.HTTPFailDown > 100 {
+		return errors.New("HTTP failures before down must be at most 100")
+	}
+	p := c.DDPProbe
+	if p.Packets > 1000 || p.Rate > 200 {
+		return errors.New("DDP probe is limited to 1000 packets at 200/s")
+	}
+	return nil
+}
+
 // fmtTemp renders a Celsius reading in the configured display unit.
 func (c *Config) fmtTemp(celsius float64) string {
-	if c.TemperatureUnit == "C" {
+	if c.unit() == "C" {
 		return fmt.Sprintf("%.0f°C", celsius)
 	}
 	return fmt.Sprintf("%.0f°F", celsius*9/5+32)

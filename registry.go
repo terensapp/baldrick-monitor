@@ -69,6 +69,25 @@ func NewRegistry(ctx context.Context, cfg *Config, p *Pinger) (*Registry, error)
 
 func (r *Registry) Persistent() bool { return r.path != "" }
 
+// Reconfigure restarts every board monitor with a new config. History,
+// incidents and ongoing lockups carry over from disk; the in-memory flight
+// recorder starts fresh.
+func (r *Registry) Reconfigure(cfg *Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cfg = cfg
+	var boards []BoardConfig
+	for _, n := range r.order {
+		boards = append(boards, r.m[n].b.cfg)
+	}
+	for _, bc := range boards {
+		r.stopLocked(bc.Name)
+	}
+	for _, bc := range boards {
+		r.startLocked(bc)
+	}
+}
+
 func (r *Registry) startLocked(bc BoardConfig) {
 	ctx, cancel := context.WithCancel(r.parent)
 	e := &entry{b: NewBoard(bc, r.cfg, r.pinger), cancel: cancel, done: make(chan struct{})}

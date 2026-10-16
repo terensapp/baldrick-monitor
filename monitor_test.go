@@ -181,3 +181,11 @@ func TestDownsampleKeepsWorst(t *testing.T) {
 		t.Errorf("temp mean = %v", out[0].V["temp"])
 	}
 }
+
+func TestDurationString(t *testing.T) {
+	for d, want := range map[time.Duration]string{6 * time.Hour: "6h", 30 * time.Minute: "30m", 90 * time.Second: "1m30s", 5 * time.Second: "5s", 1500 * time.Millisecond: "1.5s", 2*time.Hour + 5*time.Minute: "2h5m"} {
+		if got := (Duration{d}).String(); got != want {
+			t.Errorf("%v: got %q, want %q", d, got, want)
+		}
+	}
+}

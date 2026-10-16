@@ -21,6 +21,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -39,6 +40,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if err := loadSettingsFile(cfg); err != nil {
+		log.Fatal(err)
+	}
+	var cur atomic.Pointer[Config] // replaced when settings are saved
+	cur.Store(cfg)
 	pinger, err := NewPinger()
 	if err != nil {
 		log.Printf("ICMP disabled: %v", err)
@@ -71,9 +77,9 @@ func main() {
 	}
 	admin := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if cfg.AdminToken != "" {
+			if tok := cur.Load().token(); tok != "" {
 				got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-				if subtle.ConstantTimeCompare([]byte(got), []byte(cfg.AdminToken)) != 1 {
+				if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) != 1 {
 					httpError(w, http.StatusUnauthorized, errors.New("admin token required"))
 					return
 				}
@@ -92,6 +98,7 @@ func main() {
 		writeMonitorMetrics(w, upd.Info())
 	})
 	mux.HandleFunc("GET /api/meta", func(w http.ResponseWriter, r *http.Request) {
+		cfg := cur.Load()
 		writeJSON(w, map[string]any{
 			"sources":                 cfg.sources(),
 			"intervals":               cfg.Intervals,
@@ -99,16 +106,63 @@ func main() {
 			"resolution":              cfg.History.Resolution,
 			"persistent":              cfg.History.DataDir != "",
 			"boards_persistent":       reg.Persistent(),
-			"auth_required":           cfg.AdminToken != "",
+			"auth_required":           cfg.token() != "",
 			"probe":                   cfg.DDPProbe,
-			"thresholds":              cfg.Thresholds,
-			"temperature_unit":        cfg.TemperatureUnit,
+			"thresholds":              cfg.th(),
+			"temperature_unit":        cfg.unit(),
 			"suggested_subnets":       suggestedSubnets(reg),
-			"alerts_enabled":          cfg.notifier.Enabled(),
+			"alerts_enabled":          cfg.notify().Enabled(),
+			"can_save_settings":       cfg.settingsPath() != "",
 			"incident_retention_days": cfg.Incidents.RetentionDays,
 			"recorder_window":         cfg.Incidents.RecorderWindow,
 		})
 	})
+	mux.HandleFunc("GET /api/settings", admin(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, cur.Load().settingsView(*cfgPath))
+	}))
+	mux.HandleFunc("PUT /api/settings", admin(func(w http.ResponseWriter, r *http.Request) {
+		var u SettingsUpdate
+		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		old := cur.Load()
+		n, restart, err := old.withSettings(u)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		if err := n.saveSettings(); err != nil {
+			httpError(w, http.StatusInternalServerError, err)
+			return
+		}
+		n.publishLive()
+		cur.Store(n)
+		upd.SetConfig(n)
+		if restart {
+			reg.Reconfigure(n)
+		}
+		log.Printf("settings saved from %s (restarted monitoring: %v)", r.RemoteAddr, restart)
+		writeJSON(w, map[string]any{"settings": n.settingsView(*cfgPath), "restarted": restart,
+			"token_changed": n.AdminToken != old.AdminToken})
+	}))
+	mux.HandleFunc("POST /api/settings/test-channel", admin(func(w http.ResponseWriter, r *http.Request) {
+		var ch Channel
+		if err := json.NewDecoder(r.Body).Decode(&ch); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		cfg := cur.Load()
+		ch, err := cfg.channelForTest(ch)
+		if err == nil {
+			err = cfg.notify().Test(ch)
+		}
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, map[string]string{"result": "sent"})
+	}))
 	mux.HandleFunc("GET /api/update", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, upd.Info()) })
 	mux.HandleFunc("POST /api/update/check", admin(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -177,7 +231,7 @@ func main() {
 		if err != nil || d <= 0 {
 			d = 24 * time.Hour
 		}
-		samples, events := b.History(min(d, cfg.retention()), 720)
+		samples, events := b.History(min(d, cur.Load().retention()), 720)
 		writeJSON(w, map[string]any{"samples": samples, "events": events})
 	})
 	mux.HandleFunc("POST /api/boards/{name}/probe", admin(func(w http.ResponseWriter, r *http.Request) {

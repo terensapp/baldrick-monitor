@@ -292,7 +292,7 @@ func noteSuffix(n string) string {
 }
 
 func (b *Board) alert(inc *Incident, event, severity, msg string) {
-	b.glob.notifier.Send(Alert{
+	b.glob.notify().Send(Alert{
 		Event: event, Severity: severity, Board: b.cfg.Name, Host: b.cfg.Host,
 		Title: fmt.Sprintf("%s: %s", b.cfg.Name, inc.Title), Message: msg, Incident: inc.ID,
 	})
@@ -712,7 +712,7 @@ func (b *Board) leadUpFindings(inc *Incident, tl []RecPoint, until time.Time) []
 }
 
 func (b *Board) leadUp(inc *Incident, tl []RecPoint, until time.Time) (f []string, cause string) {
-	th := b.glob.Thresholds
+	th := b.glob.th()
 	add := func(format string, a ...any) { f = append(f, fmt.Sprintf(format, a...)) }
 	setCause := func(c string) {
 		if cause == "" {
@@ -1057,9 +1057,9 @@ func (b *Board) Export(id string) (*IncidentExport, bool) {
 		Format: "baldrick-monitor/incident/v1", GeneratedAt: time.Now(),
 		Summary: sum, Incident: inc, Rollups: rollups, Events: events, Settings: settings,
 		Monitor: map[string]any{
-			"intervals": b.glob.Intervals, "thresholds": b.glob.Thresholds,
+			"intervals": b.glob.Intervals, "thresholds": b.glob.th(),
 			"ddp_probe": b.glob.DDPProbe, "board_probe_mode": b.probeMode(),
-			"recorder_window": b.glob.Incidents.RecorderWindow, "temperature_unit": b.glob.TemperatureUnit,
+			"recorder_window": b.glob.Incidents.RecorderWindow, "temperature_unit": b.glob.unit(),
 		},
 	}, true
 }

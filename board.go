@@ -371,7 +371,7 @@ func (b *Board) checkPing(ctx context.Context) {
 		r.err = errors.New("/ping returned invalid JSON")
 	}
 	b.record("/ping", r)
-	down := b.glob.Thresholds.HTTPFailDown
+	down := b.glob.th().HTTPFailDown
 	now := time.Now()
 	b.mu.Lock()
 	if r.err != nil {
@@ -903,7 +903,7 @@ func (b *Board) View() BoardView {
 
 // health applies the alerting rules to a view (b.mu held).
 func (b *Board) health(v *BoardView) (string, []string) {
-	th := b.glob.Thresholds
+	th := b.glob.th()
 	var down, warn []string
 	if v.HTTPFails >= th.HTTPFailDown {
 		down = append(down, fmt.Sprintf("HTTP /ping failing (%d in a row)", v.HTTPFails))

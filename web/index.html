@@ -162,6 +162,22 @@ table.diag.snap { min-width: 680px; }
 textarea { font: inherit; color: inherit; width: 100%; min-height: 70px; border: 1px solid var(--line); background: var(--raised); border-radius: 8px; padding: 8px 10px; resize: vertical; }
 .dlgbody { max-height: calc(100vh - 220px); overflow: auto; margin: 0 -20px; padding: 0 20px; }
 @media (max-width: 700px) { .tlcharts { grid-template-columns: 1fr; } }
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px 14px; }
+.form-grid .field { margin-bottom: 0; }
+.field .unit { display: flex; gap: 6px; align-items: center; }
+.field .unit span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.chcard { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; }
+.chcard.off { opacity: .65; }
+.chhead { display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
+.chhead input[type=text] { flex: 1; min-width: 140px; border: 1px solid transparent; background: none; font-weight: 650; font-size: 14px; padding: 4px 6px; border-radius: 6px; }
+.chhead input[type=text]:hover, .chhead input[type=text]:focus { border-color: var(--line); background: var(--raised); outline: none; }
+.evs { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; }
+.evs label { display: inline-flex; gap: 6px; align-items: center; }
+.chres { font-size: 12px; margin-top: 8px; }
+.sechead { font-size: 13px; font-weight: 650; margin: 18px 0 8px; }
+.sechead:first-child { margin-top: 0; }
+.ro { font-size: 12px; color: var(--muted); display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; }
+.ro code { color: var(--fg); overflow-wrap: anywhere; }
 dialog::backdrop { background: rgba(10,12,16,.45); backdrop-filter: blur(2px); }
 dialog form { padding: 20px; }
 dialog h3 { margin: 0 0 4px; font-size: 17px; }
@@ -210,6 +226,7 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
   </div>
   <div class="fleet" id="fleet"></div>
   <div class="actions">
+    <button class="btn" type="button" data-act="settings" title="Settings" aria-label="Settings">⚙</button>
     <button class="btn" id="btnInc" type="button" data-act="incidents">Incidents <span class="badge zero" id="incBadge">0</span></button>
     <button class="btn" id="btnScan" type="button">⌕ Scan network</button>
     <button class="btn primary" id="btnAdd" type="button">＋ Add board</button>
@@ -291,6 +308,18 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
     <button class="btn ghost" value="close">Close</button>
     <button class="btn" type="button" id="upCheck">Check now</button>
     <button class="btn primary" type="button" id="upGo">Update now</button>
+  </div>
+</form></dialog>
+
+<dialog id="dlgSet" class="xl"><form method="dialog" id="fSet">
+  <h3>Settings</h3>
+  <p class="lead" id="setLead"></p>
+  <div class="tabs" id="setTabs"></div>
+  <div class="dlgbody" id="setBody"></div>
+  <div class="foot">
+    <span class="note" id="setFootNote" style="margin:0 auto 0 0"></span>
+    <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+    <button class="btn primary" type="button" id="setSave">Save settings</button>
   </div>
 </form></dialog>
 
@@ -655,6 +684,7 @@ document.addEventListener("click", async ev => {
     case "remove": openRemove(name); break;
     case "incidents": openIncidents(name || null); break;
     case "update": openUpdate(); break;
+    case "settings": openSettings(); break;
     case "capture": {
       const note = prompt(`Collect diagnostics from ${name} now? This saves the last ${META?.recorder_window || "30m"} of telemetry plus a fresh check of every endpoint.\n\nOptional note:`, "");
       if (note === null) break;
@@ -1034,6 +1064,212 @@ $("#upGo").addEventListener("click", async () => {
     setTimeout(step, 2000);
   };
   setTimeout(step, 1500);
+});
+
+// ---------- settings ----------
+let SW = null, setTab = "notify";
+const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
+const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", recovered: "Recovered", update: "Monitor update available"};
+const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "recovered"];
+const CH_TYPES = {
+  discord: {label: "Discord", help: "In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL."},
+  slack: {label: "Slack", help: "Create a Slack app with Incoming Webhooks enabled, add it to a channel, and paste its webhook URL."},
+  email: {label: "Email", help: "Any SMTP server. Gmail: smtp.gmail.com, port 587, STARTTLS, with an app password."},
+  ntfy: {label: "ntfy (phone push)", help: "Pick a hard-to-guess topic like https://ntfy.sh/baldrick-7f3k9, then subscribe to it in the ntfy app on your phone."},
+  webhook: {label: "Webhook (JSON)", help: "POSTs the alert as JSON (event, severity, board, title, message, incident_id, url, time)."},
+};
+const getPath = (o, k) => k.split(".").reduce((a, p) => a?.[p], o);
+const setPath = (o, k, v) => { const ps = k.split("."); const last = ps.pop(); ps.reduce((a, p) => a[p] ??= {}, o)[last] = v; };
+const conv = {
+  str: [v => v ?? "", v => v.trim()],
+  int: [v => v ?? "", v => v === "" ? 0 : parseInt(v, 10)],
+  num: [v => v ?? "", v => v === "" ? 0 : parseFloat(v)],
+  dur: [v => v ?? "", v => v.trim()],
+  pct: [v => v == null ? "" : +(v * 100).toFixed(2), v => v === "" ? 0 : parseFloat(v) / 100],
+  kb: [v => v == null ? "" : Math.round(v / 1024), v => v === "" ? 0 : parseFloat(v) * 1024],
+  temp: [v => v == null ? "" : +toUnit(v).toFixed(1), v => v === "" ? 0 : (tUnit() === "F" ? (parseFloat(v) - 32) * 5 / 9 : parseFloat(v))],
+  bool: [v => !!v, v => v],
+};
+function fld(label, key, type = "str", o = {}) {
+  const raw = getPath(o.obj || SW, key), v = conv[type][0](raw);
+  const attrs = `${o.ch != null ? `data-chk="${key}"` : `data-k="${key}"`} data-t="${type}"`;
+  let input;
+  if (type === "bool") input = `<label class="check"><input type="checkbox" ${attrs} ${v ? "checked" : ""}> ${esc(o.check || label)}</label>`;
+  else if (o.options) input = `<select ${attrs}>${o.options.map(([val, l]) => `<option value="${esc(val)}" ${String(raw ?? "") === String(val) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  else input = `<input ${attrs} type="${o.secret ? "password" : (["int", "num", "pct", "kb", "temp"].includes(type) ? "number" : "text")}" ${["num", "pct", "temp"].includes(type) ? 'step="any"' : ""} value="${esc(v)}" placeholder="${esc(o.ph || "")}" autocomplete="off" spellcheck="false">`;
+  if (o.unit) input = `<div class="unit">${input}<span>${esc(o.unit)}</span></div>`;
+  return type === "bool" && !o.labelAbove ? `<div class="field">${input}${o.help ? `<span class="help">${esc(o.help)}</span>` : ""}</div>`
+    : `<div class="field"><label>${esc(label)}</label>${input}${o.help ? `<span class="help">${o.html ? o.help : esc(o.help)}</span>` : ""}</div>`;
+}
+function syncForm() {
+  if (!SW) return;
+  document.querySelectorAll("#setBody [data-k]").forEach(el => setPath(SW, el.dataset.k, conv[el.dataset.t][1](el.type === "checkbox" ? el.checked : el.value)));
+  document.querySelectorAll("#setBody [data-ch]").forEach(card => {
+    const ch = SW.notifications[+card.dataset.ch];
+    card.querySelectorAll("[data-chk]").forEach(el => {
+      const k = el.dataset.chk, v = conv[el.dataset.t][1](el.type === "checkbox" ? el.checked : el.value);
+      ch[k] = k === "to" ? String(v).split(/[,;\s]+/).filter(Boolean) : v;
+    });
+    ch.events = [...card.querySelectorAll("[data-ev]")].filter(x => x.checked).map(x => x.dataset.ev);
+  });
+}
+function channelCard(ch, i) {
+  const t = CH_TYPES[ch.type] || {label: ch.type};
+  const o = {ch: i, obj: ch};
+  const savedPh = (set, ph) => set ? "saved (leave blank to keep)" : ph;
+  let fields = "";
+  if (ch.type === "email") {
+    fields = `<div class="form-grid">
+      ${fld("SMTP server", "smtp_host", "str", {...o, ph: "smtp.gmail.com"})}
+      ${fld("Port", "smtp_port", "int", {...o, ph: "587"})}
+      ${fld("Security", "tls", "str", {...o, options: [["starttls", "STARTTLS (587)"], ["tls", "TLS (465)"], ["none", "None (25, local relays only)"]]})}
+      ${fld("Username", "username", "str", {...o, ph: "optional"})}
+      ${fld("Password", "password", "str", {...o, secret: true, ph: savedPh(ch.password_set, "optional")})}
+      ${fld("From", "from", "str", {...o, ph: "monitor@example.com"})}
+      ${fld("To", "to", "str", {...o, obj: {to: (ch.to || []).join(", ")}, ph: "you@example.com, team@example.com"})}
+    </div>`;
+  } else {
+    fields = `<div class="form-grid" style="grid-template-columns:1fr${ch.type === "ntfy" ? " 220px" : ""}">
+      ${fld(ch.type === "ntfy" ? "Topic URL" : "Webhook URL", "url", "str", {...o, secret: ch.type !== "ntfy", ph: ch.url_set ? `saved: ${ch.url_hint || ""} (leave blank to keep)` : (ch.type === "ntfy" ? "https://ntfy.sh/your-topic" : "https://…")})}
+      ${ch.type === "ntfy" ? fld("Access token", "token", "str", {...o, secret: true, ph: savedPh(ch.token_set, "optional")}) : ""}
+    </div>`;
+  }
+  const evs = ch.events?.length ? ch.events : DEFAULT_EVENTS;
+  return `<div class="chcard ${ch.enabled ? "" : "off"}" data-ch="${i}">
+    <div class="chhead"><span class="tag" style="--ic:var(--s1)">${esc(t.label)}</span>
+      <input type="text" data-chk="name" data-t="str" value="${esc(ch.name || "")}" aria-label="Channel name">
+      <label class="check"><input type="checkbox" data-chk="enabled" data-t="bool" ${ch.enabled ? "checked" : ""}> Enabled</label>
+      <button class="btn sm" type="button" data-chact="test">Send test</button>
+      <button class="btn sm ghost" type="button" data-chact="remove" title="Remove channel">✕</button></div>
+    ${fields}
+    <div class="evs">${(SW.events || Object.keys(EVENT_LABEL)).map(e => `<label><input type="checkbox" data-ev="${e}" ${evs.includes(e) ? "checked" : ""}> ${EVENT_LABEL[e] || e}</label>`).join("")}</div>
+    <div class="note" style="margin-top:6px">${esc(t.help || "")}</div>
+    <div class="chres" id="chres-${i}"></div>
+  </div>`;
+}
+function renderSettings() {
+  $("#setTabs").innerHTML = SET_TABS.map(([k, l]) => `<button type="button" data-settab="${k}" class="${setTab === k ? "on" : ""}">${l}</button>`).join("");
+  const ro = SW.read_only || {};
+  $("#setLead").textContent = ro.can_save ? "Saved on the server and applied right away." : "This monitor has no data directory, so settings can't be saved here; edit the config file instead.";
+  let h = "";
+  switch (setTab) {
+    case "notify":
+      h = `<p class="note" style="margin-top:0">Where alerts go when a board stops responding, reboots unexpectedly, stops processing DDP, or recovers. Repeats for the same board and event are held back for 2 minutes.</p>
+        ${SW.notifications.map(channelCard).join("") || `<p class="note">No channels yet.</p>`}
+        <div class="row" style="margin-top:4px"><div class="field"><label>Add a channel</label><select id="chNewType">${Object.entries(CH_TYPES).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join("")}</select></div><button class="btn" type="button" data-chact="add">＋ Add</button></div>
+        <div class="sechead">Links in alerts</div>
+        <div class="row">${fld("Dashboard URL", "dashboard_url", "str", {ph: location.origin, help: "Alerts link straight to the incident on this dashboard."})}<button class="btn" type="button" data-setact="origin">Use this address</button></div>`;
+      break;
+    case "monitor":
+      h = `<div class="sechead">Polling intervals</div><p class="note" style="margin-top:0">Go durations like <code>500ms</code>, <code>5s</code>, <code>2m</code>. The board's WebSocket feed is always live; these are the checks the monitor makes itself.</p>
+        <div class="form-grid">
+          ${fld("ICMP ping", "intervals.icmp", "dur", {help: "Latency, jitter, loss"})}
+          ${fld("HTTP /ping", "intervals.http_ping", "dur", {help: "Liveness; 'Stopped responding' after N failures"})}
+          ${fld("GET /system_state", "intervals.system_state", "dur", {help: "Backs up the WebSocket feed"})}
+          ${fld("GET / (web UI)", "intervals.web_ui", "dur")}
+          ${fld("GET /settings", "intervals.settings", "dur")}
+          ${fld("DDP check", "intervals.ddp_probe", "dur")}
+        </div>
+        <div class="sechead">DDP check</div>
+        <div class="form-grid">
+          ${fld("Default mode", "ddp_probe.mode", "str", {options: [["auto", "Auto: probe only when idle"], ["always", "Always probe"], ["off", "Off: watch counters only"]], help: "Boards can override this in their own settings."})}
+          ${fld("Probe offset", "ddp_probe.offset", "int", {unit: "bytes", help: "Must be past every configured channel so no pixel changes."})}
+          ${fld("Packets per check", "ddp_probe.packets", "int")}
+          ${fld("Rate", "ddp_probe.rate", "num", {unit: "packets/s"})}
+        </div>`;
+      break;
+    case "rules":
+      h = `<div class="form-grid">
+          ${fld("Temperature unit", "temperature_unit", "str", {options: [["F", "Fahrenheit (°F)"], ["C", "Celsius (°C)"]]})}
+          ${fld("Down after", "thresholds.http_fail_down", "int", {unit: "failed /ping checks", help: "Also opens a 'Stopped responding' incident."})}
+          ${fld("ICMP loss warning", "thresholds.icmp_loss_warn", "pct", {unit: "%"})}
+          ${fld("Latency warning (p95)", "thresholds.rtt_warn_ms", "num", {unit: "ms", help: "HTTP warns at twice this."})}
+          ${fld("DDP loss warning", "thresholds.ddp_loss_warn", "pct", {unit: "%", help: "Only judged on an active stream."})}
+          ${fld("Temperature warning", "thresholds.temp_warn_c", "temp", {unit: "°" + tUnit()})}
+          ${fld("Low-memory warning", "thresholds.ram_min_warn_bytes", "kb", {unit: "KB", help: "Warns when the board's lowest free heap since boot drops below this."})}
+        </div>`;
+      break;
+    case "data":
+      h = `<div class="form-grid">
+          ${fld("Keep history for", "history_retention_days", "int", {unit: "days"})}
+          ${fld("History resolution", "history_resolution", "dur", {help: "One rollup sample per board this often."})}
+          ${fld("Keep incidents for", "incidents.retention_days", "int", {unit: "days"})}
+          ${fld("Telemetry kept per incident", "incidents.recorder_window", "dur", {help: "Raw data recorded before an incident, e.g. 30m."})}
+        </div>`;
+      break;
+    case "access":
+      h = `<div class="sechead">Admin token</div>
+        <p class="note" style="margin-top:0">${SW.auth_required ? "An admin token is set: changes need it, viewing doesn't." : "<b class='warn'>No admin token is set:</b> anyone who can reach this dashboard can change boards and settings."}</p>
+        <div class="form-grid">
+          <div class="field"><label>${SW.auth_required ? "New token" : "Set a token"}</label><div class="unit"><input type="text" id="tokNew" autocomplete="off" spellcheck="false" placeholder="at least 8 characters"><button class="btn sm" type="button" data-setact="gentoken">Generate</button></div></div>
+          ${SW.auth_required ? `<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="tokClear"> Remove the admin token</label></div>` : ""}
+        </div>
+        <div class="sechead">Updates</div>
+        <div class="form-grid">
+          ${fld("Check for updates every", "update_check_interval", "dur")}
+          ${fld("Automatic checks", "updates_disabled", "bool", {check: "Don't check for updates", labelAbove: true})}
+        </div>
+        <div class="sechead">Set on the server</div>
+        <div class="ro"><span>Listening on</span><code>${esc(ro.listen)}</code><span>Data directory</span><code>${esc(ro.data_dir || "none (memory only)")}</code>
+          <span>Config file</span><code>${esc(ro.config_file || "none")}</code><span>Saved settings</span><code>${esc(ro.settings_file || "–")}</code></div>
+        <p class="note">Settings saved here override the same settings in the config file. Delete the saved-settings file to go back to the config file.</p>`;
+      break;
+  }
+  $("#setBody").innerHTML = h;
+  $("#setFootNote").textContent = "Notifications, alert rules and access apply immediately; monitoring and data changes briefly restart monitoring.";
+  $("#setSave").disabled = !ro.can_save;
+}
+async function openSettings() {
+  try { SW = await api("GET", "api/settings"); } catch (e) { toast(e.message, true); return; }
+  SW.notifications = SW.notifications || [];
+  setTab = "notify";
+  renderSettings();
+  $("#dlgSet").showModal();
+}
+$("#dlgSet").addEventListener("click", async ev => {
+  const tab = ev.target.closest("[data-settab]");
+  if (tab) { syncForm(); setTab = tab.dataset.settab; renderSettings(); return; }
+  const sa = ev.target.closest("[data-setact]");
+  if (sa?.dataset.setact === "origin") { syncForm(); SW.dashboard_url = location.origin; renderSettings(); return; }
+  if (sa?.dataset.setact === "gentoken") { const a = new Uint8Array(18); crypto.getRandomValues(a); $("#tokNew").value = btoa(String.fromCharCode(...a)).replace(/[+/=]/g, "").slice(0, 24); return; }
+  const ca = ev.target.closest("[data-chact]");
+  if (!ca) return;
+  syncForm();
+  if (ca.dataset.chact === "add") {
+    const type = $("#chNewType").value;
+    SW.notifications.push({id: "", name: CH_TYPES[type].label.replace(/ \(.*\)/, ""), type, enabled: true, events: [...DEFAULT_EVENTS], tls: "starttls", smtp_port: 587});
+    renderSettings();
+    return;
+  }
+  const i = +ca.closest("[data-ch]").dataset.ch;
+  if (ca.dataset.chact === "remove") { SW.notifications.splice(i, 1); renderSettings(); return; }
+  if (ca.dataset.chact === "test") {
+    const out = $("#chres-" + i);
+    out.innerHTML = `<span class="spin"></span> Sending…`;
+    try { await api("POST", "api/settings/test-channel", SW.notifications[i]); out.innerHTML = `<span class="good">✓ Sent. Check that it arrived.</span>`; }
+    catch (e) { out.innerHTML = `<span class="bad">${esc(e.message)}</span>`; }
+  }
+});
+$("#dlgSet").addEventListener("change", ev => {
+  if (ev.target.dataset.chk === "enabled") ev.target.closest(".chcard").classList.toggle("off", !ev.target.checked);
+});
+$("#setSave").addEventListener("click", async () => {
+  syncForm();
+  const body = {...SW};
+  delete body.read_only; delete body.events; delete body.auth_required;
+  const tok = $("#tokNew")?.value.trim() || "";
+  body.new_admin_token = tok;
+  body.clear_admin_token = !!$("#tokClear")?.checked;
+  const b = $("#setSave"); b.disabled = true; b.textContent = "Saving…";
+  try {
+    const r = await api("PUT", "api/settings", body);
+    if (tok) saveJSON("adminToken", tok);
+    if (body.clear_admin_token) saveJSON("adminToken", "");
+    toast(r.restarted ? "Settings saved; monitoring restarted to apply them" : "Settings saved");
+    $("#dlgSet").close();
+    await loadMeta(); refresh();
+  } catch (e) { toast(e.message, true); }
+  b.disabled = false; b.textContent = "Save settings";
 });
 
 async function loadMeta() { try { META = await (await fetch("api/meta")).json(); } catch {} }

@@ -66,20 +66,22 @@ type UpdateInfo struct {
 }
 
 type Updater struct {
-	cfg    UpdatesConfig
+	notify func() *Notifier
 	image  string
 	dir    string // <data_dir>/update; "" = no host updater possible
 	client *http.Client
 	check  chan struct{}
 
 	mu        sync.Mutex
+	cfg       UpdatesConfig
+	notified  string // revision we last alerted about
 	available *Release
 	checkedAt time.Time
 	checkErr  string
 }
 
 func NewUpdater(cfg *Config) *Updater {
-	u := &Updater{cfg: cfg.Updates, image: cfg.Updates.Image, client: &http.Client{Timeout: 15 * time.Second}, check: make(chan struct{}, 1)}
+	u := &Updater{cfg: cfg.Updates, image: cfg.Updates.Image, notify: cfg.notify, client: &http.Client{Timeout: 15 * time.Second}, check: make(chan struct{}, 1)}
 	if env := os.Getenv("BALDRICK_IMAGE"); env != "" {
 		u.image = env
 	}
@@ -93,30 +95,41 @@ func NewUpdater(cfg *Config) *Updater {
 }
 
 func (u *Updater) Run(ctx context.Context) {
-	if u.cfg.Disabled {
-		return
-	}
 	if !sleepCtx(ctx, 20*time.Second) {
 		return
 	}
-	t := time.NewTicker(u.cfg.CheckInterval.Duration)
-	defer t.Stop()
 	for {
-		u.refresh(ctx)
+		u.mu.Lock()
+		cfg := u.cfg
+		u.mu.Unlock()
+		if !cfg.Disabled {
+			u.refresh(ctx)
+		}
+		t := time.NewTimer(cfg.CheckInterval.Duration)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 		case <-u.check:
+			t.Stop()
 		}
 	}
 }
 
-// CheckNow asks for an immediate registry check and waits briefly for it.
-func (u *Updater) CheckNow(ctx context.Context) {
-	if u.cfg.Disabled {
-		return
+// SetConfig applies new update settings to the running checker.
+func (u *Updater) SetConfig(c *Config) {
+	u.mu.Lock()
+	u.cfg.CheckInterval, u.cfg.Disabled = c.Updates.CheckInterval, c.Updates.Disabled
+	u.mu.Unlock()
+	select {
+	case u.check <- struct{}{}:
+	default:
 	}
+}
+
+// CheckNow runs a registry check right away (even if periodic checks are off).
+func (u *Updater) CheckNow(ctx context.Context) {
 	u.refresh(ctx)
 }
 
@@ -131,10 +144,12 @@ func (u *Updater) refresh(ctx context.Context) {
 		return
 	}
 	u.checkErr = ""
-	if u.available == nil || u.available.Revision != rel.Revision {
-		if rel.Revision != revision {
-			log.Printf("update available: %s (%s)", rel.Version, short(rel.Revision))
-		}
+	if rel.Revision != revision && rel.Revision != u.notified {
+		u.notified = rel.Revision
+		log.Printf("update available: %s (%s)", rel.Version, short(rel.Revision))
+		u.notify().Send(Alert{Event: "update", Severity: "info", Board: "baldrick-monitor",
+			Title:   "Monitor update available: " + rel.Version,
+			Message: fmt.Sprintf("%s is published for %s (running %s). Install it from the dashboard's update button.", rel.Version, u.image, version)})
 	}
 	u.available = rel
 }
