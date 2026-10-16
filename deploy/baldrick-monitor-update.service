@@ -1,0 +1,9 @@
+[Unit]
+Description=Update the baldrick-monitor container image
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/baldrick-monitor/updater.env
+ExecStart=/usr/local/libexec/baldrick-monitor-update
+TimeoutStartSec=15min

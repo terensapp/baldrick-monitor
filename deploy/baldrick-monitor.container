@@ -1,13 +1,16 @@
-# Podman Quadlet: copy to /etc/containers/systemd/, then
-#   systemctl daemon-reload && systemctl start baldrick-monitor
+# Podman Quadlet for baldrick-monitor. deploy/install.sh fills in @IMAGE@ and
+# @TZ@ and installs this as /etc/containers/systemd/baldrick-monitor.container.
 [Unit]
 Description=Baldrick Board monitor
 Wants=network-online.target
 After=network-online.target
 
 [Container]
-Image=localhost/baldrick-monitor:latest
+Image=@IMAGE@
 ContainerName=baldrick-monitor
+# The monitor checks this tag for updates; keep it identical to Image=.
+Environment=BALDRICK_IMAGE=@IMAGE@
+Environment=TZ=@TZ@
 # Host networking: DDP probes come from the host's own IP (so the board's
 # source list shows a recognisable address) and ICMP needs no NAT.
 Network=host

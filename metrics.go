@@ -153,6 +153,13 @@ func writeMetrics(w io.Writer, views []BoardView) {
 	c.write(w)
 }
 
+func writeMonitorMetrics(w io.Writer, u UpdateInfo) {
+	c := newCollector()
+	c.add("baldrick_monitor_info", "gauge", "This monitor's build.", 1, "version", u.Current.Version, "revision", u.Current.Revision)
+	c.add("baldrick_monitor_update_available", "gauge", "1 if a newer monitor image is published for this channel.", b2f(u.UpdateAvailable))
+	c.write(w)
+}
+
 func addSummary(g func(string, string, float64, string, ...string), prefix, what, board string, s Summary) {
 	if s.Count == 0 {
 		return

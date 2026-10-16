@@ -42,5 +42,8 @@
     "webhook_url": "",
     "format": "json",
     "dashboard_url": ""
+  },
+  "updates": {
+    "check_interval": "6h"
   }
 }

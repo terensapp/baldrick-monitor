@@ -185,16 +185,55 @@ datagram ICMP where allowed, e.g. macOS).
 
 ## Deploying with Podman Quadlet
 
+Images are published to `ghcr.io/terensapp/baldrick-monitor` for amd64 and
+arm64:
+
+| Tag | Built from |
+|---|---|
+| `main` | every push to `main` |
+| `sha-<commit>` | that commit |
+| `latest`, `X.Y`, `X.Y.Z` | release tags `vX.Y.Z` |
+
+On the host, from a checkout of this repo:
+
 ```bash
-sudo podman build -t localhost/baldrick-monitor:latest .
-sudo install -d /etc/baldrick-monitor /var/lib/baldrick-monitor
-sudo install -m 644 config.example.json /etc/baldrick-monitor/config.json   # edit boards
-sudo install -m 644 baldrick-monitor.container /etc/containers/systemd/
-sudo systemctl daemon-reload && sudo systemctl start baldrick-monitor
-sudo firewall-cmd --permanent --add-port=8420/tcp && sudo firewall-cmd --reload
+sudo ./deploy/install.sh               # track :main
+sudo ./deploy/install.sh --tag latest  # or track releases only
 ```
 
-The container uses host networking so DDP probes come from the host's own IP.
+This installs:
+
+- the Quadlet, as `/etc/containers/systemd/baldrick-monitor.container`
+  (host networking, `CAP_NET_RAW` for ICMP, your host's timezone);
+- a starter `/etc/baldrick-monitor/config.json`, if there isn't one;
+- the host updater;
+- a firewalld rule for port 8420.
+
+Re-running the script is safe. It keeps your config and data.
+
+### Updating from the dashboard
+
+The monitor checks the registry every `updates.check_interval` (default 6h)
+for the image its tag points at. When a newer build exists, the header shows
+**Update available**. **Update now** only drops a request file into the data
+volume. On the host, `baldrick-monitor-update.path` runs
+`/usr/local/libexec/baldrick-monitor-update`, which:
+
+1. pulls the image named in the Quadlet's `Image=` (the container never
+   chooses what gets pulled);
+2. restarts the service;
+3. waits for `/healthz`, and rolls back to the previous image if the new
+   one doesn't come up.
+
+Progress and the result appear in the update dialog. The updater's log is in
+`journalctl -u baldrick-monitor-update`. Without the host updater installed,
+the dashboard still shows when an update is available.
+
+### Cutting a release
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 ## Prometheus
 

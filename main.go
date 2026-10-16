@@ -52,6 +52,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	upd := NewUpdater(cfg)
+	go upd.Run(ctx)
 	views := func() []BoardView {
 		list := reg.List()
 		out := make([]BoardView, len(list))
@@ -87,6 +89,7 @@ func main() {
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		writeMetrics(w, views())
+		writeMonitorMetrics(w, upd.Info())
 	})
 	mux.HandleFunc("GET /api/meta", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{
@@ -106,6 +109,22 @@ func main() {
 			"recorder_window":         cfg.Incidents.RecorderWindow,
 		})
 	})
+	mux.HandleFunc("GET /api/update", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, upd.Info()) })
+	mux.HandleFunc("POST /api/update/check", admin(func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+		defer cancel()
+		upd.CheckNow(ctx)
+		writeJSON(w, upd.Info())
+	}))
+	mux.HandleFunc("POST /api/update", admin(func(w http.ResponseWriter, r *http.Request) {
+		if err := upd.Request(); err != nil {
+			httpError(w, http.StatusConflict, err)
+			return
+		}
+		log.Printf("update requested from %s", r.RemoteAddr)
+		w.WriteHeader(http.StatusAccepted)
+		writeJSON(w, upd.Info())
+	}))
 	mux.HandleFunc("GET /api/boards", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, views()) })
 	mux.HandleFunc("POST /api/boards", admin(func(w http.ResponseWriter, r *http.Request) {
 		var bc BoardConfig
@@ -284,6 +303,7 @@ func main() {
 		defer cancel()
 		srv.Shutdown(sctx)
 	}()
+	log.Printf("baldrick-monitor %s (%s, built %s)", version, short(revision), buildDate)
 	log.Printf("monitoring %d board(s); listening on %s; history %dd in %q",
 		len(reg.List()), cfg.Listen, cfg.History.RetentionDays, cfg.History.DataDir)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

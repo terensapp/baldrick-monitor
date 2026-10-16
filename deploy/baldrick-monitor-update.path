@@ -1,0 +1,11 @@
+# Runs the updater when the monitor's "Update now" button drops a request
+# file into its data volume.
+[Unit]
+Description=Watch for baldrick-monitor update requests
+
+[Path]
+PathExists=/var/lib/baldrick-monitor/update/request
+Unit=baldrick-monitor-update.service
+
+[Install]
+WantedBy=multi-user.target

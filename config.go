@@ -115,6 +115,7 @@ type Config struct {
 	History         HistoryConfig   `json:"history"`
 	Incidents       IncidentsConfig `json:"incidents"`
 	Alerts          AlertsConfig    `json:"alerts"`
+	Updates         UpdatesConfig   `json:"updates"`
 	notifier        *Notifier
 	Thresholds      Thresholds `json:"thresholds"`
 }
@@ -185,6 +186,7 @@ func (c *Config) applyDefaults() {
 		c.Incidents.RetentionDays = 90
 	}
 	def(&c.Incidents.RecorderWindow, 30*time.Minute)
+	def(&c.Updates.CheckInterval, 6*time.Hour)
 	c.notifier = NewNotifier(c.Alerts)
 	t := &c.Thresholds
 	if t.HTTPFailDown <= 0 {

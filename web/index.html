@@ -217,7 +217,7 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
 </div></div>
 <div class="sub">
   <span><b>↻</b> polled · <b>≋</b> streamed by the board · <b>Σ</b> derived · hover any value for how and when it was collected</span>
-  <span id="meta"></span>
+  <span style="display:inline-flex;gap:10px;align-items:center"><span id="ver"></span><span id="meta"></span></span>
 </div>
 <main id="boards"></main>
 
@@ -279,6 +279,19 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
   <p class="lead" id="faWhat"></p>
   <div class="field"><label for="faNote">Note (optional)</label><textarea id="faNote" placeholder="e.g. power-cycled by hand; FPP was mid-sequence"></textarea></div>
   <div class="foot"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="ack">Acknowledge</button></div>
+</form></dialog>
+
+<dialog id="dlgUpd"><form method="dialog">
+  <h3>Monitor updates</h3>
+  <p class="lead" id="upImage"></p>
+  <div class="kv" id="upKV"></div>
+  <div id="upNote" class="note"></div>
+  <div id="upProgress" class="found"></div>
+  <div class="foot">
+    <button class="btn ghost" value="close">Close</button>
+    <button class="btn" type="button" id="upCheck">Check now</button>
+    <button class="btn primary" type="button" id="upGo">Update now</button>
+  </div>
 </form></dialog>
 
 <div id="tip" role="tooltip"></div>
@@ -641,6 +654,7 @@ document.addEventListener("click", async ev => {
     case "open": window.open(`http://${b.host}/`, "_blank", "noopener"); break;
     case "remove": openRemove(name); break;
     case "incidents": openIncidents(name || null); break;
+    case "update": openUpdate(); break;
     case "capture": {
       const note = prompt(`Collect diagnostics from ${name} now? This saves the last ${META?.recorder_window || "30m"} of telemetry plus a fresh check of every endpoint.\n\nOptional note:`, "");
       if (note === null) break;
@@ -956,11 +970,79 @@ document.addEventListener("click", async ev => {
 function routeHash() { const m = location.hash.match(/^#incident=(.+)$/); if (m) openIncident(decodeURIComponent(m[1])); }
 window.addEventListener("hashchange", routeHash);
 
+// ---------- updates ----------
+let UPD = null, updating = null;
+const rev7 = r => r ? r.slice(0, 7) : "";
+async function loadUpdate() {
+  try { UPD = await (await fetch("api/update")).json(); } catch { return; }
+  const c = UPD.current;
+  $("#ver").innerHTML = UPD.update_available
+    ? `<button class="btn sm primary" type="button" data-act="update">⬆ Update available: ${esc(UPD.available.version || rev7(UPD.available.revision))}</button>`
+    : `<button class="btn sm ghost" type="button" data-act="update" title="Monitor version">${esc(c.version)}${c.revision && !c.version.includes(rev7(c.revision)) ? " · " + rev7(c.revision) : ""}</button>`;
+  if ($("#dlgUpd").open) renderUpdate();
+}
+function renderUpdate() {
+  const u = UPD, c = u.current, a = u.available;
+  $("#upImage").innerHTML = `Tracking <code>${esc(u.image)}</code>${u.disabled ? " (checks disabled)" : ""}`;
+  const kv = (k, v) => `<div><b>${k}</b><span class="num">${v}</span></div>`;
+  $("#upKV").innerHTML = kv("Running", `${esc(c.version)}${c.revision ? " · " + rev7(c.revision) : ""}`) +
+    kv("Built", c.created ? when(c.created) : "local build") +
+    kv("Published", a ? `${esc(a.version || "?")} · ${rev7(a.revision)}` : "–") +
+    kv("Published at", a?.created ? when(a.created) : "–") +
+    kv("Last checked", u.checked_at && !u.checked_at.startsWith("0001") ? ago(u.checked_at) : "not yet") +
+    kv("Host updater", u.updater_installed ? "installed" : "not installed");
+  const notes = [];
+  if (u.check_error) notes.push(`<span class="bad">Check failed: ${esc(u.check_error)}</span>`);
+  if (u.update_available) notes.push(`A newer build is published.${u.repo_url && c.revision ? ` <a href="${esc(u.repo_url)}/compare/${esc(c.revision)}...${esc(a.revision)}" target="_blank" rel="noopener">See what changed ↗</a>` : ""}`);
+  else if (a) notes.push("You're running the latest build for this tag.");
+  if (!u.updater_installed) notes.push("Updating from here needs the host updater: run <code>sudo ./deploy/install.sh</code> on the server.");
+  if (u.status && !updating) notes.push(`Last update: ${esc(u.status.message)} (${ago(u.status.time)}).`);
+  $("#upNote").innerHTML = notes.join("<br>");
+  $("#upGo").disabled = !u.updater_installed || !!updating || !(u.update_available || !c.revision);
+}
+async function openUpdate() {
+  if (!UPD) await loadUpdate();
+  renderUpdate();
+  if (!$("#dlgUpd").open) $("#dlgUpd").showModal();
+}
+$("#upCheck").addEventListener("click", async () => {
+  const b = $("#upCheck"); b.disabled = true; b.textContent = "Checking…";
+  try { UPD = await api("POST", "api/update/check"); loadUpdate(); renderUpdate(); } catch (e) { toast(e.message, true); }
+  b.disabled = false; b.textContent = "Check now";
+});
+$("#upGo").addEventListener("click", async () => {
+  const p = $("#upProgress");
+  try { await api("POST", "api/update"); } catch (e) { toast(e.message, true); return; }
+  updating = {from: UPD.current.revision, since: Date.now()};
+  renderUpdate();
+  p.className = "found show"; p.innerHTML = `<span class="spin"></span> Update requested…`;
+  const step = async () => {
+    let u = null;
+    try { u = await (await fetch("api/update", {cache: "no-store"})).json(); } catch {}
+    if (!u) { p.innerHTML = `<span class="spin"></span> Restarting the monitor…`; }
+    else if (u.current.revision !== updating.from) {
+      p.innerHTML = `<span class="good">✓ Updated to ${esc(u.current.version)}.</span> Reloading…`;
+      setTimeout(() => location.reload(), 1500); return;
+    } else if (u.status && new Date(u.status.time) >= new Date(updating.since - 5000)) {
+      if (u.status.state === "failed" || u.status.state === "done") {
+        p.className = "found show" + (u.status.state === "failed" ? " err" : "");
+        p.innerHTML = esc(u.status.message); updating = null; UPD = u; renderUpdate(); return;
+      }
+      p.innerHTML = `<span class="spin"></span> ${esc(u.status.message)}`;
+    }
+    if (Date.now() - updating.since > 5 * 60e3) { p.className = "found show err"; p.textContent = "No word from the host updater after 5 minutes. Check: journalctl -u baldrick-monitor-update"; updating = null; return; }
+    setTimeout(step, 2000);
+  };
+  setTimeout(step, 1500);
+});
+
 async function loadMeta() { try { META = await (await fetch("api/meta")).json(); } catch {} }
 (async () => {
   await loadMeta();
   await refresh();
   routeHash();
+  loadUpdate();
+  setInterval(loadUpdate, 5 * 60e3);
   setInterval(refresh, 2000);
   setInterval(() => Object.keys(cards).forEach(loadHistory), 60000);
 })();
