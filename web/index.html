@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baldrick Monitor</title>
+<style>
+:root {
+  --bg: #f5f6f8; --card: #ffffff; --fg: #1b1f24; --muted: #667085; --line: #e3e6ea;
+  --up: #16a34a; --degraded: #d97706; --down: #dc2626; --unknown: #6b7280;
+  --s1: #2563eb; --s2: #9333ea; --s3: #0891b2; --chip: #f0f2f5; --tip: #111827; --tipfg: #f9fafb;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --card: #171a21; --fg: #e6e8eb; --muted: #8b93a1; --line: #262b35;
+    --up: #22c55e; --degraded: #f59e0b; --down: #ef4444; --unknown: #9ca3af;
+    --s1: #60a5fa; --s2: #c084fc; --s3: #22d3ee; --chip: #1f2430; --tip: #f3f4f6; --tipfg: #111827;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; padding: 16px 20px 8px; }
+header h1 { font-size: 18px; margin: 0; }
+.legend, .muted { color: var(--muted); font-size: 12px; }
+.legend b { color: var(--fg); font-weight: 600; }
+main { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; padding: 8px 20px 24px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.head { display: flex; justify-content: space-between; gap: 8px; align-items: start; }
+.head h2 { margin: 0; font-size: 16px; }
+.pill { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; color: #fff; text-transform: uppercase; letter-spacing: .03em; }
+.pill.up { background: var(--up); } .pill.degraded { background: var(--degraded); } .pill.down { background: var(--down); } .pill.unknown { background: var(--unknown); }
+.reasons { margin: 6px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--degraded); }
+.reasons.down { color: var(--down); }
+h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
+.stat { background: var(--chip); border-radius: 6px; padding: 6px 8px; cursor: help; min-width: 0; }
+.stat .k { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ico { font-size: 10px; margin-left: 3px; opacity: .7; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { background: var(--chip); border-radius: 99px; padding: 2px 10px; font-size: 12px; cursor: help; white-space: nowrap; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+.ok { background: var(--up); } .bad { background: var(--down); } .warnc { background: var(--degraded); } .idle { background: var(--unknown); }
+.spark { width: 100%; height: 44px; display: block; }
+.sparkrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sparkrow .muted { margin-bottom: 2px; }
+.probe { font-size: 12px; margin-top: 6px; }
+button { font: inherit; font-size: 12px; background: var(--chip); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+button.on { background: var(--fg); color: var(--card); }
+.ranges { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.charts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+.chart svg { width: 100%; height: 90px; display: block; }
+.chart .t { font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; }
+.strip { width: 100%; height: 10px; display: block; margin-top: 8px; border-radius: 3px; }
+.events { list-style: none; margin: 0; padding: 0; font-size: 12px; max-height: 180px; overflow: auto; }
+.events li { padding: 3px 0; border-top: 1px solid var(--line); display: grid; grid-template-columns: 112px 1fr; gap: 8px; }
+.events .warn { color: var(--degraded); } .events .error { color: var(--down); }
+#tip { position: fixed; z-index: 10; max-width: 340px; background: var(--tip); color: var(--tipfg); font-size: 12px; padding: 7px 9px; border-radius: 6px; pointer-events: none; display: none; line-height: 1.45; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+#tip b { text-transform: uppercase; font-size: 10px; letter-spacing: .06em; }
+@media (max-width: 560px) { .charts, .sparkrow { grid-template-columns: 1fr; } header, main { padding-left: 16px; padding-right: 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Baldrick Monitor</h1>
+  <span class="legend"><b>↻</b> polled · <b>≋</b> streamed by the board · <b>Σ</b> derived — hover any value for how and when it was collected</span>
+  <span class="muted" id="meta"></span>
+</header>
+<main id="boards"></main>
+<div id="tip"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let META = null;
+const cards = {};          // name -> {el, range, history}
+const ICON = {polled: "↻", streamed: "≋", derived: "Σ"};
+
+// ---------- formatting ----------
+const f1 = x => x == null || isNaN(x) ? "–" : (x >= 100 ? x.toFixed(0) : x.toFixed(1));
+const msf = x => x == null ? "–" : f1(x) + " ms";
+const pct = x => x == null ? "–" : (x * 100).toFixed(x > 0 && x < 0.1 ? 1 : 0) + "%";
+const kb = x => x == null ? "–" : (x / 1024).toFixed(0) + " KB";
+function dur(s) {
+  if (s == null) return "–";
+  s = Math.floor(s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m ${s % 60}s` : `${s}s`;
+}
+function ago(t) { const s = (Date.now() - new Date(t)) / 1000; return s < 1 ? "just now" : dur(s) + " ago"; }
+function when(t) { const d = new Date(t); return d.toLocaleDateString([], {month: "short", day: "numeric"}) + " " + d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", second: "2-digit"}); }
+
+// ---------- tooltips ----------
+// data-src: key into META.sources; data-field: system_state field whose
+// last update (and whether it came from the WebSocket or the poll) we show;
+// data-ep: HTTP endpoint whose last check we show; data-extra: free text.
+function tipText(el, b) {
+  const src = META?.sources?.[el.dataset.src];
+  let h = "";
+  if (src) {
+    h += `<b>${ICON[src.kind] || ""} ${esc(src.kind)}</b>${src.interval ? " · every " + esc(src.interval) : ""}<br>${esc(src.via)}`;
+  }
+  const f = el.dataset.field && b?.field_updates?.[el.dataset.field];
+  if (f) h += `<br>Last update ${ago(f.at)} via ${f.src === "ws" ? "WebSocket push" : "GET /system_state poll"}`;
+  const e = el.dataset.ep && b?.endpoints?.[el.dataset.ep];
+  if (e) h += `<br>Last check ${ago(e.last_time)}: ${e.last_ok ? "OK" : "FAILED"} (${e.last_status || "no response"}, ${f1(e.last_ms)} ms)` +
+    `${e.last_error ? "<br>" + esc(e.last_error) : ""}<br>${e.ok} ok / ${e.fail} failed since start`;
+  if (el.dataset.extra) h += `<br>${esc(el.dataset.extra)}`;
+  return h;
+}
+const tip = $("#tip");
+let tipAt = null; // {x, y} of the hovered element, to refresh it after re-render
+function showTip(ev) { placeTip(ev.target.closest("[data-src],[data-extra]")); }
+function placeTip(el) {
+  if (!el) { tip.style.display = "none"; tipAt = null; return; }
+  const card = el.closest(".card");
+  const b = card && cards[card.dataset.name]?.view;
+  tip.innerHTML = tipText(el, b);
+  tip.style.display = tip.innerHTML ? "block" : "none";
+  const r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+  let x = Math.min(Math.max(8, r.left), innerWidth - tw - 8), y = r.bottom + 6;
+  if (y + th > innerHeight - 8) y = r.top - th - 6;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+  tipAt = {x: r.left + r.width / 2, y: r.top + r.height / 2};
+}
+function refreshTip() {
+  if (!tipAt || tip.style.display === "none") return;
+  const el = document.elementFromPoint(tipAt.x, tipAt.y);
+  placeTip(el && el.closest("[data-src],[data-extra]"));
+}
+document.addEventListener("mouseover", showTip);
+document.addEventListener("focusin", showTip);
+document.documentElement.addEventListener("mouseleave", () => placeTip(null));
+document.addEventListener("scroll", () => tip.style.display = "none", true);
+
+function stat(label, value, src, opts = {}) {
+  const kind = META?.sources?.[src]?.kind;
+  return `<div class="stat" tabindex="0" data-src="${src}" ${opts.field ? `data-field="${opts.field}"` : ""} ${opts.extra ? `data-extra="${esc(opts.extra)}"` : ""}>
+    <div class="k">${esc(label)}<span class="ico">${ICON[kind] || ""}</span></div><div class="v"${opts.color ? ` style="color:var(--${opts.color})"` : ""}>${value}</div></div>`;
+}
+
+// ---------- charts ----------
+function spark(vals, color) {
+  const W = 300, H = 44, pts = vals.filter(v => v != null);
+  if (!pts.length) return `<svg class="spark" viewBox="0 0 ${W} ${H}"></svg>`;
+  const max = Math.max(...pts) * 1.1 || 1, n = Math.max(vals.length - 1, 1);
+  let d = "", pen = false, miss = "";
+  vals.forEach((v, i) => {
+    const x = (i / n * W).toFixed(1);
+    if (v == null) { pen = false; miss += `<line x1="${x}" x2="${x}" y1="0" y2="${H}" stroke="var(--down)" stroke-width="1.5" opacity=".7"/>`; return; }
+    d += `${pen ? "L" : "M"}${x},${(H - 2 - v / max * (H - 4)).toFixed(1)}`; pen = true;
+  });
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${miss}<path d="${d}" fill="none" stroke="var(--${color})" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function chart(samples, series, fmt, t0, t1) {
+  const W = 300, H = 90;
+  let max = 0;
+  for (const s of samples) for (const se of series) { const v = s.v?.[se.key]; if (v != null) max = Math.max(max, v * (se.scale || 1)); }
+  max = max * 1.15 || 1;
+  const span = Math.max(t1 - t0, 1), x = t => ((new Date(t) - t0) / span * W).toFixed(1);
+  const gapMs = Math.max(span / 300, (META ? parseDur(META.resolution) : 60e3) * 2.5);
+  const paths = series.map(se => {
+    let d = "", prev = null;
+    for (const s of samples) {
+      const v = s.v?.[se.key];
+      if (v == null) { prev = null; continue; }
+      const t = new Date(s.t);
+      d += `${prev && t - prev < gapMs ? "L" : "M"}${x(s.t)},${(H - 2 - v * (se.scale || 1) / max * (H - 6)).toFixed(1)}`;
+      prev = t;
+    }
+    return `<path d="${d}" fill="none" stroke="var(--${se.color})" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
+  }).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}" stroke="var(--line)"/>${paths}</svg>
+    <div class="t"><span>${series.map(s => `<span style="color:var(--${s.color})">■</span> ${s.label}`).join(" ")}</span><span>max ${fmt(max / 1.15)}</span></div>`;
+}
+
+function parseDur(s) {
+  let ms = 0; for (const [, n, u] of String(s).matchAll(/([\d.]+)(ms|h|m|s)/g)) ms += n * {ms: 1, s: 1e3, m: 6e4, h: 36e5}[u];
+  return ms || 60e3;
+}
+
+function strip(samples, t0, t1) {
+  const W = 300, span = Math.max(t1 - t0, 1), step = parseDur(META?.resolution) / span * W;
+  const rects = samples.map(s => `<rect x="${((new Date(s.t) - t0) / span * W).toFixed(2)}" width="${Math.max(step, 0.6).toFixed(2)}" y="0" height="10" fill="var(--${s.status})"/>`).join("");
+  return `<svg class="strip" viewBox="0 0 ${W} 10" preserveAspectRatio="none"><rect width="${W}" height="10" fill="var(--chip)"/>${rects}</svg>`;
+}
+
+// ---------- rendering ----------
+function live(b) {
+  const p = b.probe, temp = b.temperature?.[0];
+  const dropRatio = b.ddp.recvd + b.ddp.dropped ? b.ddp.dropped / (b.ddp.recvd + b.ddp.dropped) : null;
+  const ep = (path, label) => {
+    const e = b.endpoints?.[path];
+    const cls = !e ? "idle" : e.last_ok ? "ok" : "bad";
+    const src = {"/ping": "http_ping", "/": "web_ui", "/system_state": "system_state", "/settings": "settings"}[path];
+    return `<span class="chip" tabindex="0" data-src="${src}" data-ep="${path}"><span class="dot ${cls}"></span>${label}${e ? " " + f1(e.last_ms) + " ms" : ""}<span class="ico">↻</span></span>`;
+  };
+  const reasons = b.reasons?.length ? `<ul class="reasons ${b.status === "down" ? "down" : ""}">${b.reasons.map(r => `<li>• ${esc(r)}</li>`).join("")}</ul>` : "";
+  const ports = (b.ports || []).filter(p => p.models > 0);
+  const window = META ? META.resolution : "1m";
+  return `
+  <div class="head">
+    <div><h2>${esc(b.name)}</h2><div class="muted">${esc(b.host)}${b.hostname ? " · " + esc(b.hostname) : ""}${b.model ? " · " + esc(b.model) : ""}</div></div>
+    <span class="pill ${b.status}">${b.status}</span>
+  </div>${reasons}
+
+  <h3>Reachability <span class="muted" style="text-transform:none;letter-spacing:0">(stats over the last ${esc(window)})</span></h3>
+  <div class="grid">
+    ${b.icmp_available ? `
+    ${stat("ICMP p50", msf(b.icmp.p50), "icmp")}
+    ${stat("ICMP p95", msf(b.icmp.p95), "icmp")}
+    ${stat("ICMP jitter", msf(b.icmp.jitter), "icmp", {extra: "Mean change in RTT between consecutive replies"})}
+    ${stat("ICMP loss", pct(b.icmp.loss), "icmp", {color: b.icmp.loss > 0 ? "degraded" : null, extra: `${b.icmp_lost} of ${b.icmp_sent} lost since start`})}` :
+    stat("ICMP", "n/a", "icmp", {extra: "ICMP socket unavailable (needs root or CAP_NET_RAW)"})}
+    ${stat("HTTP p50", msf(b.http.p50), "http_ping")}
+    ${stat("HTTP p95", msf(b.http.p95), "http_ping")}
+    ${stat("HTTP jitter", msf(b.http.jitter), "http_ping")}
+    ${stat("HTTP fails", pct(b.http.loss), "http_ping", {color: b.http.loss > 0 ? "degraded" : null, extra: `${b.http_consecutive_failures} consecutive failures right now`})}
+  </div>
+  <div class="sparkrow" style="margin-top:8px">
+    <div data-src="icmp"><div class="muted">ICMP RTT, last ${b.icmp_series?.length || 0} pings</div>${spark(b.icmp_series || [], "s1")}</div>
+    <div data-src="http_ping"><div class="muted">HTTP /ping, last ${b.http_series?.length || 0} checks</div>${spark(b.http_series || [], "s2")}</div>
+  </div>
+
+  <h3>HTTP endpoints &amp; feed</h3>
+  <div class="chips">
+    ${ep("/ping", "/ping")}${ep("/", "web UI")}${ep("/system_state", "/system_state")}${ep("/settings", "/settings")}
+    <span class="chip" tabindex="0" data-src="ws" data-extra="${esc(b.ws_connected ? `Last message ${f1(b.ws_last_message_age_s)}s ago · ${b.ws_messages} messages · ${b.ws_reconnects} reconnects` : "Disconnected: " + (b.ws_error || "connecting"))}"><span class="dot ${b.ws_connected ? "ok" : "bad"}"></span>WebSocket<span class="ico">≋</span></span>
+  </div>
+
+  <h3>DDP</h3>
+  <div class="grid">
+    ${stat("Last check", p ? (p.ok ? "OK" : "FAILED") : "pending", "ddp_probe", {color: p ? (p.ok ? "up" : "down") : null, extra: p ? `${ago(p.time)} · mode ${b.probe_mode}${p.passive ? " (passive)" : ""} · ${b.probe_counts.ok} ok / ${b.probe_counts.fail} failed` : `mode ${b.probe_mode}`})}
+    ${stat("Detect time", p && p.ok && !p.passive ? f1(p.detect_ms / 1000) + " s" : "–", "ddp_probe", {extra: "Time from first probe packet until the board's counters showed it. The board publishes counters in ~5s windows, so a few seconds is normal."})}
+    ${stat("Received", f1(b.ddp.recvd), "stream", {field: "streaming", extra: "Packets in the board's current window"})}
+    ${stat("Dropped", f1(b.ddp.dropped) + (dropRatio ? ` (${pct(dropRatio)})` : ""), "stream", {field: "streaming", color: b.ddp.dropped > 0 ? "degraded" : null, extra: "Sequence-number gaps the board detected"})}
+    ${stat("Sources", b.ddp.sources?.length ? esc(b.ddp.sources.join(", ")) : "none", "stream", {field: "streaming"})}
+    ${stat("Frame rate", f1(b.frame_rate) + " fps", "board", {field: "frame_rate"})}
+  </div>
+  ${p ? `<div class="probe muted">${esc(p.note)}</div>` : ""}
+  <div style="margin-top:6px"><button data-probe="${esc(b.name)}" ${b.probe_mode === "off" ? "disabled" : ""}>Run DDP check now</button></div>
+
+  <h3>Board</h3>
+  <div class="grid">
+    ${stat("Temperature", temp != null ? f1(temp) + " °C" : "–", "board", {field: "temperature", color: temp > (META?.thresholds?.temp_warn_c ?? 70) ? "degraded" : null})}
+    ${stat("Uptime", dur(b.uptime), "board", {field: "uptime", extra: `${b.reboots} reboot(s) detected while monitoring`})}
+    ${stat("RAM free", kb(b.ram_available), "board", {field: "ram_available"})}
+    ${stat("RAM low-water", kb(b.ram_minimum), "board", {field: "ram_minimum", extra: `Lowest free heap since boot · largest block ${kb(b.ram_largest_block)} · OOM count ${b.oom_count}`})}
+    ${stat("Firmware", esc(b.firmware || "–") + (b.update_available ? " ⬆" : ""), "board", {field: "ota", color: b.update_available ? "degraded" : null, extra: `Factory ${b.factory_firmware || "?"} · available ${b.available_firmware || "?"}`})}
+    ${stat("Ports in use", ports.length ? `${ports.length} / ${b.ports.length}` : "–", "settings", {extra: ports.map((p, i) => `${p.models} model(s), ${p.channels} ch`).join(" · ")})}
+    ${stat("Throughput", f1(b.network_throughput), "board", {field: "network_throughput", extra: "As reported by the board (units unspecified)"})}
+    ${stat("FPP seen", String(b.fpp?.length || 0), "board", {field: "fpp", extra: (b.fpp || []).map(f => `${f.hostname} ${f.ip} v${f.sw_version}`).join(" · ")})}
+  </div>`;
+}
+
+function historyBlock(name) {
+  const c = cards[name], h = c.history, days = META?.retention_days ?? 7;
+  const ranges = [["1h", 1], ["6h", 6], ["24h", 24], ["7d", 168], ["30d", 720]].filter(([, hrs]) => hrs <= days * 24 || hrs === 1);
+  const btns = ranges.map(([l, hrs]) => `<button class="${c.range === hrs ? "on" : ""}" data-range="${hrs}" data-board="${esc(name)}">${l}</button>`).join("");
+  const head = `<h3 data-src="history" tabindex="0">History <span class="ico">Σ</span> <span class="muted" style="text-transform:none;letter-spacing:0">kept ${days} days${META?.persistent ? " on disk" : " in memory"}</span></h3><div class="ranges">${btns}</div>`;
+  if (!h) return head + `<div class="muted" style="margin-top:6px">loading…</div>`;
+  const t1 = Date.now(), t0 = t1 - c.range * 36e5, s = h.samples || [];
+  if (!s.length) return head + `<div class="muted" style="margin-top:6px">No history yet: the first rollup lands after ${esc(META?.resolution || "1m")}.</div>`;
+  const notDown = s.filter(x => x.status !== "down").length, up = s.filter(x => x.status === "up").length;
+  const ev = (h.events || []).slice(0, 200);
+  return head + `
+    <div class="muted" style="margin-top:6px">Reachable ${pct(notDown / s.length)} · fully healthy ${pct(up / s.length)} of ${s.length} samples</div>
+    ${strip(s, t0, t1)}
+    <div class="charts">
+      <div class="chart">${chart(s, [{key: "icmp_p95", label: "ICMP p95", color: "s1"}, {key: "http_p95", label: "HTTP p95", color: "s2"}], v => f1(v) + " ms", t0, t1)}</div>
+      <div class="chart">${chart(s, [{key: "icmp_loss", label: "ICMP loss", color: "s1", scale: 100}, {key: "http_loss", label: "HTTP fail", color: "s2", scale: 100}, {key: "ws_down", label: "WS down", color: "down", scale: 100}], v => f1(v) + "%", t0, t1)}</div>
+      <div class="chart">${chart(s, [{key: "temp", label: "Temp °C", color: "degraded"}], v => f1(v) + " °C", t0, t1)}</div>
+      <div class="chart">${chart(s, [{key: "fps", label: "Frame rate", color: "s3"}, {key: "ddp_dropped", label: "DDP dropped", color: "down"}], f1, t0, t1)}</div>
+    </div>
+    <h3>Events (${ev.length}${(h.events || []).length > ev.length ? "+" : ""})</h3>
+    <ul class="events">${ev.length ? ev.map(e => `<li class="${e.level}"><span class="muted">${when(e.time)}</span><span>${esc(e.msg)}</span></li>`).join("") : `<li><span></span><span class="muted">No events in this range</span></li>`}</ul>`;
+}
+
+async function loadHistory(name) {
+  const c = cards[name];
+  try {
+    const r = await fetch(`api/boards/${encodeURIComponent(name)}/history?range=${c.range}h`);
+    c.history = await r.json();
+  } catch { /* keep previous */ }
+  $(".hist", c.el).innerHTML = historyBlock(name);
+}
+
+async function refresh() {
+  let boards;
+  try { boards = await (await fetch("api/boards")).json(); }
+  catch { $("#meta").textContent = "monitor unreachable"; return; }
+  const root = $("#boards");
+  for (const b of boards) {
+    let c = cards[b.name];
+    if (!c) {
+      const el = document.createElement("section");
+      el.className = "card"; el.dataset.name = b.name;
+      el.innerHTML = `<div class="live"></div><div class="hist"></div>`;
+      root.appendChild(el);
+      let range = 24;
+      try { range = +localStorage.getItem("range:" + b.name) || 24; } catch {}
+      c = cards[b.name] = {el, range};
+      $(".hist", el).innerHTML = historyBlock(b.name);
+      loadHistory(b.name);
+    }
+    c.view = b;
+    $(".live", c.el).innerHTML = live(b);
+  }
+  $("#meta").textContent = `updated ${new Date().toLocaleTimeString()}`;
+  refreshTip();
+}
+
+document.addEventListener("click", async ev => {
+  const pb = ev.target.closest("[data-probe]");
+  if (pb) {
+    pb.disabled = true; pb.textContent = "Checking…";
+    await fetch(`api/boards/${encodeURIComponent(pb.dataset.probe)}/probe`, {method: "POST"});
+    return;
+  }
+  const rb = ev.target.closest("[data-range]");
+  if (rb) {
+    const c = cards[rb.dataset.board];
+    c.range = +rb.dataset.range;
+    try { localStorage.setItem("range:" + rb.dataset.board, c.range); } catch {}
+    $(".hist", c.el).innerHTML = historyBlock(rb.dataset.board);
+    loadHistory(rb.dataset.board);
+  }
+});
+
+(async () => {
+  try { META = await (await fetch("api/meta")).json(); } catch {}
+  await refresh();
+  setInterval(refresh, 2000);
+  setInterval(() => Object.keys(cards).forEach(loadHistory), 60000);
+})();
+</script>
+</body>
+</html>

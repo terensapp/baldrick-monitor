@@ -1,0 +1,25 @@
+# Podman Quadlet: copy to /etc/containers/systemd/, then
+#   systemctl daemon-reload && systemctl start baldrick-monitor
+[Unit]
+Description=Baldrick Board monitor
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=localhost/baldrick-monitor:latest
+ContainerName=baldrick-monitor
+# Host networking: DDP probes come from the host's own IP (so the board's
+# source list shows a recognisable address) and ICMP needs no NAT.
+Network=host
+# Raw ICMP socket for latency/jitter.
+AddCapability=CAP_NET_RAW
+NoNewPrivileges=true
+ReadOnly=true
+Volume=/etc/baldrick-monitor:/etc/baldrick-monitor:ro,Z
+Volume=/var/lib/baldrick-monitor:/var/lib/baldrick-monitor:Z
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

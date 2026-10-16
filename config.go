@@ -1,0 +1,214 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+)
+
+// Duration accepts Go duration strings ("5s", "1m") in JSON.
+type Duration struct{ time.Duration }
+
+func (d *Duration) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	v, err := time.ParseDuration(s)
+	d.Duration = v
+	return err
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+
+type BoardConfig struct {
+	Name string `json:"name"`
+	Host string `json:"host"`
+	// Per-board override of ddp_probe.mode.
+	DDPProbe string `json:"ddp_probe,omitempty"`
+}
+
+// Intervals covers everything the monitor polls. Values that the board
+// streams over its WebSocket arrive as fast as the board pushes them.
+type Intervals struct {
+	ICMP        Duration `json:"icmp"`         // ICMP echo
+	HTTPPing    Duration `json:"http_ping"`    // GET /ping
+	SystemState Duration `json:"system_state"` // GET /system_state (backs up the WebSocket)
+	WebUI       Duration `json:"web_ui"`       // GET / (web UI served)
+	Settings    Duration `json:"settings"`     // GET /settings (hostname, ports)
+	DDPProbe    Duration `json:"ddp_probe"`    // DDP check
+}
+
+type ProbeConfig struct {
+	// off: never inject DDP. auto: inject only when no other source is
+	// streaming, otherwise judge the live stream passively. always: inject
+	// even while another source is streaming.
+	Mode string `json:"mode"`
+	// DDP byte offset to write to. Keep it well past the board's configured
+	// channels so probe packets never reach a pixel.
+	Offset  uint32  `json:"offset"`
+	Packets int     `json:"packets"`
+	Rate    float64 `json:"rate"`
+}
+
+type HistoryConfig struct {
+	RetentionDays int      `json:"retention_days"`
+	DataDir       string   `json:"data_dir"`   // empty: keep history in memory only
+	Resolution    Duration `json:"resolution"` // rollup period for stored metrics
+}
+
+type Thresholds struct {
+	HTTPFailDown    int     `json:"http_fail_down"`
+	ICMPLossWarn    float64 `json:"icmp_loss_warn"`
+	RTTWarnMs       float64 `json:"rtt_warn_ms"`
+	DDPLossWarn     float64 `json:"ddp_loss_warn"`
+	TempWarnC       float64 `json:"temp_warn_c"`
+	RAMMinWarnBytes float64 `json:"ram_min_warn_bytes"`
+}
+
+type Config struct {
+	Listen     string        `json:"listen"`
+	Boards     []BoardConfig `json:"boards"`
+	Intervals  Intervals     `json:"intervals"`
+	DDPProbe   ProbeConfig   `json:"ddp_probe"`
+	History    HistoryConfig `json:"history"`
+	Thresholds Thresholds    `json:"thresholds"`
+}
+
+func loadConfig(path, listen, boards, dataDir string) (*Config, error) {
+	cfg := &Config{}
+	if path != "" {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(b, cfg); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if listen != "" {
+		cfg.Listen = listen
+	}
+	if dataDir != "" {
+		cfg.History.DataDir = dataDir
+	}
+	for _, h := range strings.Split(boards, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			cfg.Boards = append(cfg.Boards, BoardConfig{Host: h})
+		}
+	}
+	cfg.applyDefaults()
+	return cfg, cfg.validate()
+}
+
+func (c *Config) applyDefaults() {
+	def := func(d *Duration, v time.Duration) {
+		if d.Duration <= 0 {
+			d.Duration = v
+		}
+	}
+	if c.Listen == "" {
+		c.Listen = ":8420"
+	}
+	iv := &c.Intervals
+	def(&iv.ICMP, time.Second)
+	def(&iv.HTTPPing, 5*time.Second)
+	def(&iv.SystemState, 15*time.Second)
+	def(&iv.WebUI, time.Minute)
+	def(&iv.Settings, 5*time.Minute)
+	def(&iv.DDPProbe, time.Minute)
+	if c.DDPProbe.Mode == "" {
+		c.DDPProbe.Mode = "auto"
+	}
+	if c.DDPProbe.Offset == 0 {
+		c.DDPProbe.Offset = 1_000_000
+	}
+	if c.DDPProbe.Packets <= 0 {
+		c.DDPProbe.Packets = 60
+	}
+	if c.DDPProbe.Rate <= 0 {
+		c.DDPProbe.Rate = 20
+	}
+	if c.History.RetentionDays <= 0 {
+		c.History.RetentionDays = 7
+	}
+	def(&c.History.Resolution, time.Minute)
+	t := &c.Thresholds
+	if t.HTTPFailDown <= 0 {
+		t.HTTPFailDown = 3
+	}
+	if t.ICMPLossWarn <= 0 {
+		t.ICMPLossWarn = 0.05
+	}
+	if t.RTTWarnMs <= 0 {
+		t.RTTWarnMs = 50
+	}
+	if t.DDPLossWarn <= 0 {
+		t.DDPLossWarn = 0.01
+	}
+	if t.TempWarnC <= 0 {
+		t.TempWarnC = 70
+	}
+	if t.RAMMinWarnBytes <= 0 {
+		t.RAMMinWarnBytes = 20_000
+	}
+	for i := range c.Boards {
+		if c.Boards[i].Name == "" {
+			c.Boards[i].Name = c.Boards[i].Host
+		}
+	}
+}
+
+func (c *Config) validate() error {
+	if len(c.Boards) == 0 {
+		return fmt.Errorf("no boards configured (use -config or -boards)")
+	}
+	seen := map[string]bool{}
+	for _, b := range c.Boards {
+		if b.Host == "" {
+			return fmt.Errorf("board %q has no host", b.Name)
+		}
+		if seen[b.Name] {
+			return fmt.Errorf("duplicate board name %q", b.Name)
+		}
+		seen[b.Name] = true
+		for _, m := range []string{b.DDPProbe, c.DDPProbe.Mode} {
+			switch m {
+			case "", "off", "auto", "always":
+			default:
+				return fmt.Errorf("invalid ddp_probe mode %q", m)
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Config) retention() time.Duration {
+	return time.Duration(c.History.RetentionDays) * 24 * time.Hour
+}
+
+// Source says how a value on the dashboard is collected.
+type Source struct {
+	Kind     string `json:"kind"` // polled, streamed, derived
+	Via      string `json:"via"`
+	Interval string `json:"interval,omitempty"`
+}
+
+func (c *Config) sources() map[string]Source {
+	iv := c.Intervals
+	ws := "WebSocket /ws: the board pushes changes (about every 1–5s); also refreshed by the GET /system_state poll every " + iv.SystemState.String()
+	return map[string]Source{
+		"icmp":         {"polled", "ICMP echo request", iv.ICMP.String()},
+		"http_ping":    {"polled", "HTTP GET /ping (expects 200 + JSON)", iv.HTTPPing.String()},
+		"web_ui":       {"polled", "HTTP GET / (expects 200 text/html)", iv.WebUI.String()},
+		"system_state": {"polled", "HTTP GET /system_state (expects 200 + JSON with uptime)", iv.SystemState.String()},
+		"settings":     {"polled", "HTTP GET /settings (hostname, port/model config)", iv.Settings.String()},
+		"ddp_probe":    {"polled", "DDP check: passive if a live stream is present, else a short burst of black frames to an unused offset, confirmed via the board's counters", iv.DDPProbe.String()},
+		"ws":           {"streamed", "WebSocket /ws connection health (keepalive sent every 1s, stale after 6s)", ""},
+		"board":        {"streamed", ws, ""},
+		"stream":       {"streamed", ws + ". The board counts packets in ~5s windows; the counters reset when a stream stops", ""},
+		"history":      {"derived", "Rolled up from the live values every " + c.History.Resolution.String(), c.History.Resolution.String()},
+	}
+}

@@ -1,0 +1,33 @@
+{
+  "listen": ":8420",
+  "boards": [
+    { "name": "pixel1", "host": "192.168.6.4" }
+  ],
+  "intervals": {
+    "icmp": "1s",
+    "http_ping": "5s",
+    "system_state": "15s",
+    "web_ui": "1m",
+    "settings": "5m",
+    "ddp_probe": "1m"
+  },
+  "ddp_probe": {
+    "mode": "auto",
+    "offset": 1000000,
+    "packets": 60,
+    "rate": 20
+  },
+  "history": {
+    "retention_days": 7,
+    "resolution": "1m",
+    "data_dir": "/var/lib/baldrick-monitor"
+  },
+  "thresholds": {
+    "http_fail_down": 3,
+    "icmp_loss_warn": 0.05,
+    "rtt_warn_ms": 50,
+    "ddp_loss_warn": 0.01,
+    "temp_warn_c": 70,
+    "ram_min_warn_bytes": 20000
+  }
+}
