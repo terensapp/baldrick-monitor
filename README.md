@@ -63,6 +63,34 @@ Events are logged when any of these happen:
 - a WebSocket drop;
 - a DDP check failure or recovery.
 
+## Managing boards
+
+Add, edit and remove boards from the dashboard. Changes apply right away,
+with no restart:
+
+- **＋ Add board** takes an IP or hostname. **Test connection** shows which
+  board answers there (model, hostname, firmware) before you add it.
+- **⌕ Scan network** checks every address in a subnet (up to a /22) for a
+  Baldrick web API and lists what it finds, with one-click **Add**. The
+  subnets of boards you already monitor are offered as suggestions.
+- Each card's **•••** menu has **Edit** (rename, change host or DDP mode;
+  a rename keeps the board's history) and **Remove**, which can optionally
+  delete the stored history.
+
+The board list is saved to `<data_dir>/boards.json`. The `boards` list in the
+config file only seeds that file on first start; after that, `boards.json`
+is the source of truth. To start over from the config, delete it. Without a
+`data_dir`, UI changes are lost on restart.
+
+Set `"admin_token"` in the config to require
+`Authorization: Bearer <token>` for these changes and for manual DDP checks.
+The dashboard asks for the token once and remembers it in the browser.
+Viewing stays open.
+
+API: `POST /api/boards`, `PUT /api/boards/{name}`,
+`DELETE /api/boards/{name}?purge=1`, `GET /api/inspect?host=`,
+`GET /api/scan?cidr=`.
+
 ## History
 
 Every `history.resolution` (default 1m), the monitor rolls up the current

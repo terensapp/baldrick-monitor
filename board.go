@@ -200,12 +200,18 @@ func (b *Board) probeMode() string {
 	return b.glob.DDPProbe.Mode
 }
 
+// Run monitors the board until ctx is cancelled and every loop has exited.
 func (b *Board) Run(ctx context.Context) {
-	go b.icmpLoop(ctx)
-	go b.wsLoop(ctx)
-	go b.ddpLoop(ctx)
-	go b.rollupLoop(ctx)
-	b.httpLoop(ctx)
+	var wg sync.WaitGroup
+	for _, loop := range []func(context.Context){b.icmpLoop, b.wsLoop, b.ddpLoop, b.rollupLoop, b.httpLoop} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loop(ctx)
+		}()
+	}
+	wg.Wait()
+	b.client.CloseIdleConnections()
 }
 
 // TriggerProbe requests an immediate DDP check; it is a no-op if one is
@@ -730,6 +736,7 @@ type BoardView struct {
 	FrameRate         float64           `json:"frame_rate"`
 	NetworkThroughput float64           `json:"network_throughput"`
 	ProbeMode         string            `json:"probe_mode"`
+	ProbeOverride     string            `json:"ddp_probe"` // this board's own setting; "" = default
 	Probe             *DDPProbe         `json:"probe"`
 	ProbeCounts       map[string]uint64 `json:"probe_counts"`
 
@@ -768,6 +775,7 @@ func (b *Board) View() BoardView {
 		FrameRate:         st.FrameRate,
 		NetworkThroughput: st.NetworkThroughput,
 		ProbeMode:         b.probeMode(),
+		ProbeOverride:     b.cfg.DDPProbe,
 		ProbeCounts:       map[string]uint64{"ok": b.probeCounts["ok"], "fail": b.probeCounts["fail"]},
 	}
 	if b.haveState {

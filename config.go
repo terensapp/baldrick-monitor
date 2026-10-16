@@ -70,6 +70,9 @@ type Thresholds struct {
 
 type Config struct {
 	Listen string `json:"listen"`
+	// If set, changing boards or triggering probes requires
+	// "Authorization: Bearer <admin_token>".
+	AdminToken string `json:"admin_token,omitempty"`
 	// Display unit for temperatures: "F" (default) or "C". Thresholds and
 	// Prometheus metrics stay in Celsius.
 	TemperatureUnit string        `json:"temperature_unit"`
@@ -161,38 +164,53 @@ func (c *Config) applyDefaults() {
 	if t.RAMMinWarnBytes <= 0 {
 		t.RAMMinWarnBytes = 20_000
 	}
-	for i := range c.Boards {
-		if c.Boards[i].Name == "" {
-			c.Boards[i].Name = c.Boards[i].Host
-		}
-	}
 }
 
 func (c *Config) validate() error {
 	if c.TemperatureUnit != "F" && c.TemperatureUnit != "C" {
 		return fmt.Errorf("temperature_unit must be F or C, got %q", c.TemperatureUnit)
 	}
-	if len(c.Boards) == 0 {
-		return fmt.Errorf("no boards configured (use -config or -boards)")
+	if err := validMode(c.DDPProbe.Mode); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
-	for _, b := range c.Boards {
-		if b.Host == "" {
-			return fmt.Errorf("board %q has no host", b.Name)
+	for i := range c.Boards {
+		if err := normalizeBoard(&c.Boards[i]); err != nil {
+			return err
 		}
-		if seen[b.Name] {
-			return fmt.Errorf("duplicate board name %q", b.Name)
+		if seen[c.Boards[i].Name] {
+			return fmt.Errorf("duplicate board name %q", c.Boards[i].Name)
 		}
-		seen[b.Name] = true
-		for _, m := range []string{b.DDPProbe, c.DDPProbe.Mode} {
-			switch m {
-			case "", "off", "auto", "always":
-			default:
-				return fmt.Errorf("invalid ddp_probe mode %q", m)
-			}
-		}
+		seen[c.Boards[i].Name] = true
 	}
 	return nil
+}
+
+func validMode(m string) error {
+	switch m {
+	case "", "off", "auto", "always":
+		return nil
+	}
+	return fmt.Errorf("invalid ddp_probe mode %q (want off, auto or always)", m)
+}
+
+// normalizeBoard trims and checks a board definition, defaulting its name
+// to its host.
+func normalizeBoard(b *BoardConfig) error {
+	b.Name, b.Host = strings.TrimSpace(b.Name), strings.TrimSpace(b.Host)
+	if b.Host == "" {
+		return fmt.Errorf("board %q has no host", b.Name)
+	}
+	if strings.ContainsAny(b.Host, "/:@ ") {
+		return fmt.Errorf("host %q should be a bare IP or hostname", b.Host)
+	}
+	if b.Name == "" {
+		b.Name = b.Host
+	}
+	if len(b.Name) > 64 || strings.ContainsAny(b.Name, "/\\") {
+		return fmt.Errorf("board name %q is too long or contains a slash", b.Name)
+	}
+	return validMode(b.DDPProbe)
 }
 
 // fmtTemp renders a Celsius reading in the configured display unit.
