@@ -11,9 +11,11 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -102,7 +104,8 @@ type EndpointStats struct {
 type DDPProbe struct {
 	Time     time.Time `json:"time"`
 	OK       bool      `json:"ok"`
-	Passive  bool      `json:"passive"` // judged from a live stream, nothing injected
+	Passive  bool      `json:"passive"`           // judged from a live stream, nothing injected
+	Skipped  bool      `json:"skipped,omitempty"` // couldn't or shouldn't run (e.g. a show is playing)
 	Note     string    `json:"note"`
 	Sent     int       `json:"sent"`
 	DetectMs float64   `json:"detect_ms"`
@@ -153,14 +156,15 @@ type Board struct {
 	wsMessages   uint64
 	wsErr        string
 
-	reboots       uint64
-	probe         *DDPProbe
-	probeSkipping bool
-	probeCounts   map[string]uint64
-	events        []Event
-	history       []Sample
-	store         *store
-	probeNow      chan struct{}
+	reboots         uint64
+	probe           *DDPProbe
+	probeSkip       *DDPProbe // the current skip, while checks are paused
+	probeSkipReason string
+	probeCounts     map[string]uint64
+	events          []Event
+	history         []Sample
+	store           *store
+	probeNow        chan struct{}
 
 	rec          recorder
 	incidents    []*Incident
@@ -600,10 +604,14 @@ func (b *Board) wsLoop(ctx context.Context) {
 
 // ---- DDP ----
 
-func ddpFrame(seq byte, offset uint32, data []byte) []byte {
+// ddpFrame builds a probe packet. It deliberately leaves PUSH unset, so it
+// never makes the board output a frame, and uses sequence 0 ("not used"),
+// so it can't disturb the board's gap counting for a real stream. Baldrick
+// boards still count such packets and list their sender as a source.
+func ddpFrame(offset uint32, data []byte) []byte {
 	f := make([]byte, 10+len(data))
-	f[0] = 0x41 // version 1, PUSH
-	f[1] = seq  // 1..15; the board counts gaps as dropped
+	f[0] = 0x40 // version 1, no PUSH
+	f[1] = 0    // sequence not used
 	f[3] = 1    // destination: default output device
 	binary.BigEndian.PutUint32(f[4:], offset)
 	binary.BigEndian.PutUint16(f[8:], uint16(len(data)))
@@ -642,7 +650,7 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	res := DDPProbe{Time: time.Now()}
 	st, err := b.fetchState(ctx)
 	if err != nil {
-		res.Note = "cannot read system_state: " + err.Error()
+		res.Skipped, res.Note = true, "cannot read system_state: "+err.Error()
 		b.finishProbe(res)
 		return
 	}
@@ -662,10 +670,19 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 		b.finishProbe(res)
 		return
 	}
+	// Don't inject while a show is playing or about to start, even in the
+	// gap between sequences.
+	if mode != "always" && !pc.IgnoreFPP {
+		if busy := fppBusy(ctx, st.FPP); busy != "" {
+			res.Skipped, res.Note = true, busy
+			b.finishProbe(res)
+			return
+		}
+	}
 
 	conn, err := net.Dial("udp", net.JoinHostPort(hostOnly(b.cfg.Host), "4048"))
 	if err != nil {
-		res.Note = "cannot open UDP socket: " + err.Error()
+		res.Skipped, res.Note = true, "cannot open UDP socket: "+err.Error()
 		b.finishProbe(res)
 		return
 	}
@@ -675,10 +692,11 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	b.mu.Unlock()
 	gap := time.Duration(float64(time.Second) / pc.Rate)
 	sent := make(chan int, 1)
+	var stop atomic.Bool
 	go func() {
-		n, payload := 0, make([]byte, 3)
-		for i := 0; i < pc.Packets && ctx.Err() == nil; i++ {
-			if _, err := conn.Write(ddpFrame(byte(i%15+1), pc.Offset, payload)); err == nil {
+		n, frame := 0, ddpFrame(pc.Offset, make([]byte, 3))
+		for i := 0; i < pc.Packets && ctx.Err() == nil && !stop.Load(); i++ {
+			if _, err := conn.Write(frame); err == nil {
 				n++
 			}
 			time.Sleep(gap)
@@ -696,7 +714,24 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 			continue
 		}
 		polled++
-		if st.Streaming.DDPRecvd > 0 {
+		var others []string
+		for _, s := range st.Streaming.DDPSources {
+			if s != local {
+				others = append(others, s)
+			}
+		}
+		if len(others) > 0 && mode != "always" {
+			// A show started mid-check: get out of its way at once.
+			stop.Store(true)
+			res.Sent = <-sent
+			res.Passive = true
+			res.OK = st.Streaming.DDPRecvd > 0
+			res.Recvd, res.Dropped, res.Sources = st.Streaming.DDPRecvd, st.Streaming.DDPDropped, st.Streaming.DDPSources
+			res.Note = fmt.Sprintf("live DDP from %s started during the check, so the probe stopped after %d packets", strings.Join(others, ", "), res.Sent)
+			b.finishProbe(res)
+			return
+		}
+		if st.Streaming.DDPRecvd > 0 || slices.Contains(st.Streaming.DDPSources, local) {
 			res.OK = true
 			res.DetectMs = ms(time.Since(start))
 			res.Recvd, res.Dropped, res.Sources = st.Streaming.DDPRecvd, st.Streaming.DDPDropped, st.Streaming.DDPSources
@@ -706,7 +741,7 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	res.Sent = <-sent
 	if !res.OK && polled == 0 && pollErr != nil {
 		// Never saw the counters, so this says nothing about DDP.
-		res.Note = "cannot read system_state: " + pollErr.Error()
+		res.Skipped, res.Note = true, "cannot read system_state: "+pollErr.Error()
 		b.finishProbe(res)
 		return
 	}
@@ -722,16 +757,25 @@ func (b *Board) finishProbe(res DDPProbe) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rec.add("probe", res)
-	// A check that couldn't run (HTTP down) says nothing about DDP; keep
-	// the last real result and log the first skip of a streak only.
-	if strings.HasPrefix(res.Note, "cannot ") {
-		if !b.probeSkipping {
-			b.addEvent("warn", "DDP check skipped: %s", res.Note)
+	// A skipped check says nothing about DDP: keep the last real result and
+	// log only when the reason for skipping changes.
+	if res.Skipped {
+		reason, _, _ := strings.Cut(res.Note, ":")
+		if b.probeSkipReason != reason {
+			level := "warn"
+			if strings.HasPrefix(res.Note, "FPP") {
+				level = "info"
+			}
+			b.addEvent(level, "DDP check paused: %s", res.Note)
 		}
-		b.probeSkipping = true
+		b.probeSkipReason = reason
+		b.probeSkip = &res
 		return
 	}
-	b.probeSkipping = false
+	if b.probeSkipReason != "" && strings.HasPrefix(b.probeSkipReason, "FPP") {
+		b.addEvent("info", "DDP checks resumed")
+	}
+	b.probeSkipReason, b.probeSkip = "", nil
 	prev := b.probe
 	b.probe = &res
 	b.noteDDP(res)
@@ -796,10 +840,12 @@ type BoardView struct {
 	ICMPAvailable bool                     `json:"icmp_available"`
 	ICMP          Summary                  `json:"icmp"`
 	ICMPSeries    []*float64               `json:"icmp_series"`
+	ICMPTimes     []int64                  `json:"icmp_times"`
 	ICMPSent      uint64                   `json:"icmp_sent"`
 	ICMPLost      uint64                   `json:"icmp_lost"`
 	HTTP          Summary                  `json:"http"`
 	HTTPSeries    []*float64               `json:"http_series"`
+	HTTPTimes     []int64                  `json:"http_times"`
 	HTTPFails     int                      `json:"http_consecutive_failures"`
 	Endpoints     map[string]EndpointStats `json:"endpoints"`
 
@@ -817,6 +863,7 @@ type BoardView struct {
 	ProbeMode         string            `json:"probe_mode"`
 	ProbeOverride     string            `json:"ddp_probe"` // this board's own setting; "" = default
 	Probe             *DDPProbe         `json:"probe"`
+	ProbePaused       *DDPProbe         `json:"probe_paused,omitempty"`
 	ProbeCounts       map[string]uint64 `json:"probe_counts"`
 
 	Events []Event `json:"events"`
@@ -844,9 +891,11 @@ func (b *Board) View() BoardView {
 		ICMPAvailable: b.pinger != nil,
 		ICMP:          summarize(b.icmp.last(b.icmpN)),
 		ICMPSeries:    series(b.icmp.last(120)),
+		ICMPTimes:     b.icmp.lastTimes(120),
 		ICMPSent:      b.icmpSent, ICMPLost: b.icmpLost,
 		HTTP:       summarize(b.httpPing.last(b.httpN)),
 		HTTPSeries: series(b.httpPing.last(120)),
+		HTTPTimes:  b.httpPing.lastTimes(120),
 		HTTPFails:  b.pingFails,
 		Endpoints:  map[string]EndpointStats{},
 
@@ -870,6 +919,10 @@ func (b *Board) View() BoardView {
 	if b.probe != nil {
 		p := *b.probe
 		v.Probe = &p
+	}
+	if b.probeSkip != nil {
+		p := *b.probeSkip
+		v.ProbePaused = &p
 	}
 	for k, e := range b.endpoints {
 		v.Endpoints[k] = *e

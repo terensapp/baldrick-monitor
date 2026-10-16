@@ -3,20 +3,23 @@ package main
 import (
 	"math"
 	"sort"
+	"time"
 )
 
 // ring holds the most recent latency samples in milliseconds; NaN marks a
 // lost sample.
 type ring struct {
 	buf  []float64
+	ts   []int64 // unix milliseconds of each sample
 	next int
 	full bool
 }
 
-func newRing(n int) *ring { return &ring{buf: make([]float64, n)} }
+func newRing(n int) *ring { return &ring{buf: make([]float64, n), ts: make([]int64, n)} }
 
 func (r *ring) add(v float64) {
 	r.buf[r.next] = v
+	r.ts[r.next] = time.Now().UnixMilli()
 	r.next = (r.next + 1) % len(r.buf)
 	if r.next == 0 {
 		r.full = true
@@ -24,12 +27,17 @@ func (r *ring) add(v float64) {
 }
 
 // last returns up to n samples, oldest first.
-func (r *ring) last(n int) []float64 {
-	var all []float64
-	if r.full {
-		all = append(append(all, r.buf[r.next:]...), r.buf[:r.next]...)
+func (r *ring) last(n int) []float64 { return lastN(r.buf, r.next, r.full, n) }
+
+// lastTimes returns the timestamps matching last(n).
+func (r *ring) lastTimes(n int) []int64 { return lastN(r.ts, r.next, r.full, n) }
+
+func lastN[T any](buf []T, next int, full bool, n int) []T {
+	var all []T
+	if full {
+		all = append(append(all, buf[next:]...), buf[:next]...)
 	} else {
-		all = append(all, r.buf[:r.next]...)
+		all = append(all, buf[:next]...)
 	}
 	if len(all) > n {
 		all = all[len(all)-n:]

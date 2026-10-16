@@ -8,6 +8,8 @@
 //	curl -XPOST localhost:8081/_sim/leak           # heap drains ~3 KB/s until it crashes
 //	curl -XPOST localhost:8081/_sim/hot            # temperature climbs to 82°C
 //	curl -XPOST localhost:8081/_sim/ddpstall       # stop counting DDP packets
+//	curl -XPOST 'localhost:8081/_sim/fpp?state=playing'  # its fake FPP plays a show
+//	curl -XPOST 'localhost:8081/_sim/fpp?start_in=120'   # ...or schedules one in 2 min
 //	curl -XPOST localhost:8081/_sim/reset          # back to normal
 package main
 
@@ -44,13 +46,16 @@ type sim struct {
 	shownRecv  float64
 	shownDrop  float64
 	conns      map[net.Conn]bool
+	fppState   string    // the fake FPP's status_name
+	fppStart   time.Time // its next scheduled show
+	listen     string
 }
 
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8081", "HTTP listen address")
 	ddp := flag.String("ddp", "127.0.0.1:4048", "DDP UDP listen address (empty to disable)")
 	flag.Parse()
-	s := &sim{boot: time.Now(), ram: 115_000, temp: 30, ddpSrc: map[string]time.Time{}, window: time.Now(), conns: map[net.Conn]bool{}}
+	s := &sim{boot: time.Now(), ram: 115_000, temp: 30, ddpSrc: map[string]time.Time{}, window: time.Now(), conns: map[net.Conn]bool{}, fppState: "idle", listen: *listen}
 	go s.tick()
 	if *ddp != "" {
 		go s.ddpLoop(*ddp)
@@ -69,6 +74,21 @@ func main() {
 		fmt.Fprintf(w, "<!doctype html><title>Baldrick Board</title><h1>Fake Baldrick</h1>%s", strings.Repeat("<!-- padding -->", 60))
 	}))
 	mux.HandleFunc("/_sim/", s.control)
+	// The fake board doubles as the FPP it reports, so FPP-aware probing can
+	// be exercised too.
+	mux.HandleFunc("/api/fppd/status", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		st := map[string]any{"status_name": s.fppState, "current_sequence": "", "current_playlist": map[string]string{"playlist": ""},
+			"scheduler": map[string]any{"nextPlaylist": map[string]any{"playlistName": "", "scheduledStartTime": 0}}}
+		if s.fppState == "playing" {
+			st["current_playlist"] = map[string]string{"playlist": "Halloween"}
+		}
+		if !s.fppStart.IsZero() {
+			st["scheduler"] = map[string]any{"nextPlaylist": map[string]any{"playlistName": "Halloween", "scheduledStartTime": s.fppStart.Unix()}}
+		}
+		s.json(w, st)
+	})
 	log.Printf("fake board on http://%s (DDP %s)", *listen, *ddp)
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }
@@ -124,7 +144,7 @@ func (s *sim) state() map[string]any {
 			"current_factory_version": "sim", "available_firmware_version": "v0.0.1-sim"}}},
 		"ram_available": s.ram, "ram_minimum": s.ram - 2000, "ram_largest_block": s.ram * 0.8,
 		"uptime": int(time.Since(s.boot).Seconds()), "oom_count": 0, "ui_messages": []any{},
-		"network_throughput": 0, "fpp": []any{}, "frame_rate": fps, "test_mode_active": false, "fx_active": "",
+		"network_throughput": 0, "fpp": []any{map[string]any{"hostname": "fakefpp", "ip": s.listen, "sw_version": "9.5", "hardware": "simulator"}}, "frame_rate": fps, "test_mode_active": false, "fx_active": "",
 		"streaming": map[string]any{"ddp_sources": srcs, "ddp_recvd": s.shownRecv, "ddp_dropped": s.shownDrop,
 			"sacn_sources": []string{}, "sacn_recvd": 0, "sacn_dropped": 0, "artnet_sources": []string{}, "artnet_recvd": 0, "artnet_dropped": 0},
 	}
@@ -188,8 +208,16 @@ func (s *sim) control(w http.ResponseWriter, r *http.Request) {
 		s.hot = true
 	case "ddpstall":
 		s.ddpStall = true
+	case "fpp":
+		if st := r.URL.Query().Get("state"); st != "" {
+			s.fppState = st
+		}
+		if in, _ := strconv.Atoi(r.URL.Query().Get("start_in")); in > 0 {
+			s.fppStart = time.Now().Add(time.Duration(in) * time.Second)
+		}
 	case "reset":
 		s.leak, s.hot, s.ddpStall, s.temp, s.ram, s.hangUntil = false, false, false, 30, 115_000, time.Time{}
+		s.fppState, s.fppStart = "idle", time.Time{}
 	default:
 		http.Error(w, "unknown mode", http.StatusNotFound)
 		return

@@ -20,6 +20,9 @@ metrics. It is a single static Go binary with no dependencies.
 Temperatures are shown in °F by default (`"temperature_unit": "C"` to switch).
 Thresholds (`temp_warn_c`) and Prometheus metrics stay in Celsius.
 
+Hovering over any chart shows the exact time and values at that point
+(sparklines, history charts, the status strip and incident telemetry).
+
 Every value on the dashboard has a hover tooltip. It says whether the value is
 polled (↻) or streamed (≋), how often it is collected, and when it last changed
 and how: WebSocket push or poll.
@@ -42,6 +45,27 @@ and ignore a lone packet. `ddp_dropped` counts DDP sequence-number gaps.
 - **`off`**: never injects. Stream counters are still shown.
 
 Set `ddp_probe` on a single board to override the mode for that board.
+
+**Probes and live shows.** In `auto` mode, probes are built to stay out of
+a show's way:
+
+- **FPP-aware:** before each probe, the monitor asks every FPP the board
+  reports (`/api/fppd/status`) whether it's playing or has a show
+  scheduled within 5 minutes, and waits if so. This covers the gaps
+  between sequences in a playlist. Turn it off with
+  `ddp_probe.ignore_fpp` (Settings → Monitoring → During shows).
+- **Gets out of the way:** if another DDP source appears mid-probe, the
+  probe stops sending immediately.
+- **Harmless even if they overlap:** probe packets never set DDP's PUSH
+  flag, so they can't trigger an output frame. They use sequence number 0
+  ("not used"), so they can't show up as dropped packets in a real stream.
+  And they write black to an offset past every configured channel. Tested
+  on a Baldrick 8 Port v1 (v3.8.9): it counts such packets and lists the
+  sender as a source.
+
+When a check is held back, the dashboard shows it as paused (for example
+"paused for the show"), keeps the last real result, and doesn't count the
+skip as a failure.
 
 ### Health
 

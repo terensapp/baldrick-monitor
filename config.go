@@ -84,6 +84,10 @@ type ProbeConfig struct {
 	Offset  uint32  `json:"offset"`
 	Packets int     `json:"packets"`
 	Rate    float64 `json:"rate"`
+	// In auto mode the monitor asks each FPP the board knows about whether
+	// it's playing (or about to) and holds probes until it's idle. Set to
+	// skip that check.
+	IgnoreFPP bool `json:"ignore_fpp,omitempty"`
 }
 
 type HistoryConfig struct {
@@ -409,7 +413,7 @@ func (c *Config) sources() map[string]Source {
 		"web_ui":       {"polled", "HTTP GET / (expects 200 text/html)", iv.WebUI.String()},
 		"system_state": {"polled", "HTTP GET /system_state (expects 200 + JSON with uptime)", iv.SystemState.String()},
 		"settings":     {"polled", "HTTP GET /settings (hostname, port/model config)", iv.Settings.String()},
-		"ddp_probe":    {"polled", "DDP check: passive if a live stream is present, else a short burst of black frames to an unused offset, confirmed via the board's counters", iv.DDPProbe.String()},
+		"ddp_probe":    {"polled", "DDP check: passive while a live stream is present or FPP is playing (or about to); otherwise a short burst of no-PUSH, sequence-0 packets to an unused offset, confirmed via the board's counters", iv.DDPProbe.String()},
 		"ws":           {"streamed", "WebSocket /ws connection health (keepalive sent every 1s, stale after 6s)", ""},
 		"board":        {"streamed", ws, ""},
 		"stream":       {"streamed", ws + ". The board counts packets in ~5s windows; the counters reset when a stream stops", ""},

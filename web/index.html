@@ -200,8 +200,12 @@ table.scan td { padding: 7px 8px; border-bottom: 1px solid var(--line); }
 .scanwrap { max-height: 50vh; overflow: auto; }
 .check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 
+#xhair { position: fixed; width: 1px; background: var(--fg); opacity: .4; pointer-events: none; display: none; z-index: 45; }
+svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
 #tip { position: fixed; z-index: 50; max-width: 340px; background: var(--tip); color: var(--tipfg); font-size: 12px; padding: 8px 10px; border-radius: 8px; pointer-events: none; display: none; line-height: 1.5; box-shadow: 0 8px 24px rgba(0,0,0,.25); }
 #tip b { text-transform: uppercase; font-size: 10px; letter-spacing: .07em; }
+#tip.chart b { text-transform: none; font-size: inherit; letter-spacing: 0; }
+#tip.chart .tt { color: var(--tipfg); opacity: .75; font-size: 11px; }
 #toasts { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 60; }
 .toast { background: var(--tip); color: var(--tipfg); padding: 9px 14px; border-radius: 10px; font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.25); max-width: 360px; }
 .toast.err { background: var(--down); color: #fff; }
@@ -395,6 +399,7 @@ function tipText(el, b) {
 const tip = $("#tip");
 let tipAt = null;
 function placeTip(el) {
+  tip.classList.remove("chart");
   if (!el) { tip.style.display = "none"; tipAt = null; return; }
   const card = el.closest(".card");
   tip.innerHTML = tipText(el, card && cards[card.dataset.name]?.view);
@@ -412,11 +417,11 @@ function refreshTip() {
   const el = document.elementFromPoint(tipAt.x, tipAt.y);
   placeTip(el && el.closest("[data-src],[data-extra]"));
 }
-const tipTarget = ev => placeTip(ev.target.closest?.("[data-src],[data-extra]"));
+const tipTarget = ev => { if (!ev.target.closest?.("svg[data-chart]")) placeTip(ev.target.closest?.("[data-src],[data-extra]")); };
 document.addEventListener("mouseover", tipTarget);
 document.addEventListener("focusin", tipTarget);
 document.documentElement.addEventListener("mouseleave", () => placeTip(null));
-document.addEventListener("scroll", () => placeTip(null), true);
+document.addEventListener("scroll", () => { placeTip(null); hideChartTip(); }, true);
 
 const srcAttrs = (src, o = {}) => `tabindex="0" data-src="${src}"${o.field ? ` data-field="${o.field}"` : ""}${o.ep ? ` data-ep="${o.ep}"` : ""}${o.extra ? ` data-extra="${esc(o.extra)}"` : ""}`;
 const icon = src => `<span class="ico">${ICON[META?.sources?.[src]?.kind] || ""}</span>`;
@@ -428,7 +433,99 @@ function stat(label, value, src, o = {}) {
 }
 
 // ---------- charts ----------
-function spark(vals, color) {
+// ---------- chart hover ----------
+// Each chart registers what it plots; one crosshair + tooltip reads it back.
+const CHARTS = {};
+function withChart(svg, id, meta) {
+  if (!id) return svg;
+  CHARTS[id] = meta;
+  return svg.replace("<svg ", `<svg data-chart="${esc(id)}" `);
+}
+function spark(vals, color, o = {}) {
+  return withChart(sparkSVG(vals, color), o.id, {kind: "index", series: [{label: o.label, color, fmt: o.fmt || f2, nullText: o.nullText || "–",
+    pts: vals.map((v, i) => ({t: o.times?.[i], v}))}]});
+}
+function chart(samples, series, fmt, t0, t1, id) {
+  return withChart(chartSVG(samples, series, fmt, t0, t1), id, {kind: "time", t0, t1, tol: parseDur(META?.resolution) * 1.5,
+    series: series.map(se => ({label: se.label, color: se.color, fmt, pts: samples.map(x => ({t: +new Date(x.t), v: x.v?.[se.key] == null ? null : x.v[se.key] * (se.scale || 1)}))}))});
+}
+function strip(samples, t0, t1, id) {
+  return withChart(stripSVG(samples, t0, t1), id, {kind: "status", t0, t1, tol: parseDur(META?.resolution) * 1.5,
+    pts: samples.map(x => ({t: +new Date(x.t), status: x.status}))});
+}
+function tlChart(series, markers, t0, t1, fmt, id) {
+  return withChart(tlChartSVG(series, markers, t0, t1, fmt), id, {kind: "time", t0, t1, markers, tol: Math.max(2500, (t1 - t0) / 150),
+    series: series.map(se => ({...se, fmt, nullText: se.lossMarks ? "no reply" : "–"}))});
+}
+function nearest(pts, t) { // pts sorted by t
+  let lo = 0, hi = pts.length - 1;
+  if (hi < 0) return null;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].t < t) lo = mid + 1; else hi = mid; }
+  return lo > 0 && Math.abs(pts[lo - 1].t - t) <= Math.abs(pts[lo].t - t) ? pts[lo - 1] : pts[lo];
+}
+const xhair = document.createElement("div");
+xhair.id = "xhair";
+document.body.appendChild(xhair);
+let chartAt = null; // last pointer position over a chart
+function showChartTip(svg, cx) {
+  const m = CHARTS[svg.dataset.chart];
+  if (!m) return false;
+  const r = svg.getBoundingClientRect(), f = Math.min(1, Math.max(0, (cx - r.left) / r.width));
+  const row = (se, v) => `<span style="color:var(--${se.color})">●</span> ${esc(se.label)}: <b>${v == null ? (se.nullText || "–") : se.fmt(v)}</b>`;
+  let at, x, lines = [];
+  if (m.kind === "index") {
+    const pts = m.series[0].pts, n = pts.length;
+    if (!n) return false;
+    const i = Math.round(f * (n - 1));
+    at = pts[i].t; x = r.left + (n > 1 ? i / (n - 1) : 0) * r.width;
+    lines = m.series.map(se => row(se, se.pts[i]?.v));
+  } else {
+    const t = m.t0 + f * (m.t1 - m.t0);
+    if (m.kind === "status") {
+      const p = nearest(m.pts, t);
+      if (!p || Math.abs(p.t - t) > m.tol) return false;
+      at = p.t; lines = [`<span style="color:var(--${p.status})">■</span> <b>${p.status}</b>`];
+    } else {
+      let best = null;
+      for (const se of m.series) {
+        const p = nearest(se.pts, t);
+        const ok = p && Math.abs(p.t - t) <= m.tol;
+        if (ok && (!best || Math.abs(p.t - t) < Math.abs(best - t))) best = p.t;
+        lines.push(row(se, ok ? p.v : null));
+      }
+      if (best == null) return false;
+      at = best;
+      for (const mk of m.markers || []) if (Math.abs(mk.t - at) <= m.tol * 2) lines.push(`<span style="color:var(--${mk.color})">┆</span> ${mk.label} ${new Date(mk.t).toLocaleTimeString()}`);
+    }
+    x = r.left + (at - m.t0) / Math.max(m.t1 - m.t0, 1) * r.width;
+  }
+  tip.innerHTML = `${at ? `<span class="tt">${when(at)}</span><br>` : ""}${lines.join("<br>")}`;
+  tip.classList.add("chart");
+  tip.style.display = "block";
+  const tw = tip.offsetWidth, th = tip.offsetHeight;
+  let tx = x + 12; if (tx + tw > innerWidth - 8) tx = x - tw - 12;
+  let ty = r.top - th - 6; if (ty < 8) ty = r.bottom + 6;
+  tip.style.left = Math.max(8, tx) + "px"; tip.style.top = ty + "px";
+  Object.assign(xhair.style, {display: "block", left: x + "px", top: r.top + "px", height: r.height + "px"});
+  tipAt = null; // the regular tooltip shouldn't redraw over this
+  return true;
+}
+function hideChartTip() { xhair.style.display = "none"; if (chartAt) tip.style.display = "none"; chartAt = null; }
+function chartPointer(ev) {
+  const svg = ev.target.closest?.("svg[data-chart]");
+  if (!svg) { if (chartAt) hideChartTip(); return; }
+  chartAt = {x: ev.clientX, y: ev.clientY};
+  if (!showChartTip(svg, ev.clientX)) { xhair.style.display = "none"; tip.style.display = "none"; }
+}
+document.addEventListener("pointermove", chartPointer);
+document.addEventListener("pointerdown", chartPointer);
+function refreshChartTip() { // charts re-render every refresh; keep the readout live
+  if (!chartAt) return;
+  const svg = document.elementFromPoint(chartAt.x, chartAt.y)?.closest?.("svg[data-chart]");
+  if (svg) showChartTip(svg, chartAt.x); else hideChartTip();
+}
+
+function sparkSVG(vals, color) {
   const W = 300, H = 40, pts = vals.filter(v => v != null);
   if (!pts.length) return `<svg class="spark" viewBox="0 0 ${W} ${H}"></svg>`;
   const max = Math.max(...pts) * 1.15 || 1, n = Math.max(vals.length - 1, 1);
@@ -440,7 +537,7 @@ function spark(vals, color) {
   });
   return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${miss}<path d="${d}" fill="none" stroke="var(--${color})" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`;
 }
-function chart(samples, series, fmt, t0, t1) {
+function chartSVG(samples, series, fmt, t0, t1) {
   const W = 300, H = 84;
   let max = 0;
   for (const s of samples) for (const se of series) { const v = s.v?.[se.key]; if (v != null) max = Math.max(max, v * (se.scale || 1)); }
@@ -462,7 +559,7 @@ function chart(samples, series, fmt, t0, t1) {
   return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}<line x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}" stroke="var(--line)" vector-effect="non-scaling-stroke"/>${paths}</svg>
     <div class="t"><span>${series.map(s => `<span style="color:var(--${s.color})">●</span> ${s.label}`).join("&nbsp; ")}</span><span class="num">peak ${fmt(max)}</span></div>`;
 }
-function strip(samples, t0, t1) {
+function stripSVG(samples, t0, t1) {
   const W = 300, span = Math.max(t1 - t0, 1), step = parseDur(META?.resolution) / span * W;
   const rects = samples.map(s => `<rect x="${((new Date(s.t) - t0) / span * W).toFixed(2)}" width="${Math.max(step, 0.6).toFixed(2)}" y="0" height="8" fill="var(--${s.status})"/>`).join("");
   return `<svg class="strip" viewBox="0 0 ${W} 8" preserveAspectRatio="none"><rect width="${W}" height="8" rx="4" fill="var(--raised)"/>${rects}</svg>`;
@@ -490,7 +587,9 @@ function live(b) {
   const rs = (b.reasons || []).filter(r => !incTitles.some(t => r.startsWith(t)) && !/incidents not acknowledged/.test(r));
   const reasons = rs.length ? `<div class="callout"><ul>${rs.map(r => `<li>${esc(r)}</li>`).join("")}</ul></div>` : "";
   const ddpVal = !p ? `<span class="spin"></span>` : p.ok ? "OK" : "FAILED";
-  const ddpSub = !p ? "first check pending" : p.passive ? "live stream · " + ago(p.time) : (p.ok ? `seen in ${f1(p.detect_ms / 1000)}s · ` : "") + ago(p.time);
+  const paused = b.probe_paused;
+  const ddpSub = paused ? (paused.note.startsWith("FPP") ? "paused for the show" : "check paused")
+    : !p ? "first check pending" : p.passive ? "live stream · " + ago(p.time) : (p.ok ? `seen in ${f1(p.detect_ms / 1000)}s · ` : "") + ago(p.time);
   const warnC = META?.thresholds?.temp_warn_c ?? 70;
 
   const net = `
@@ -522,7 +621,8 @@ function live(b) {
       ${stat("sACN", `${f1(b.sacn.recvd)} / ${f1(b.sacn.dropped)}`, "stream", {field: "streaming", extra: "sACN received / dropped in the board's current window"})}
       ${stat("Art-Net", `${f1(b.artnet.recvd)} / ${f1(b.artnet.dropped)}`, "stream", {field: "streaming", extra: "Art-Net received / dropped in the board's current window"})}
     </div>
-    ${p ? `<div class="note">${esc(p.note)}</div>` : ""}
+    ${paused ? `<div class="note"><b>Paused:</b> ${esc(paused.note)}</div>` : ""}
+    ${p ? `<div class="note">${paused ? "Last check: " : ""}${esc(p.note)}</div>` : ""}
     <div style="margin-top:10px"><button class="btn sm" type="button" data-act="probe" ${b.probe_mode === "off" ? "disabled" : ""}>Run DDP check now</button></div>`;
 
   const board = `
@@ -562,13 +662,13 @@ function live(b) {
     <div class="kpis">
       ${kpi("Ping", b.icmp_available && b.icmp.count > b.icmp.lost ? `${f2(b.icmp.p50)}<small>ms</small>` : "–", b.icmp_available ? `p95 ${f2(b.icmp.p95)} · loss ${pct(b.icmp.loss)}` : "ICMP unavailable", "icmp", {cls: b.icmp.loss > 0 ? "warn" : ""})}
       ${kpi("HTTP", b.http.count > b.http.lost ? `${f2(b.http.p50)}<small>ms</small>` : "–", `${epOK}/${epSeen || 4} endpoints OK`, "http_ping", {cls: b.http_consecutive_failures ? "bad" : epOK < epSeen ? "warn" : ""})}
-      ${kpi("DDP", ddpVal, ddpSub, "ddp_probe", {cls: p ? (p.ok ? "good" : "bad") : ""})}
+      ${kpi("DDP", ddpVal, ddpSub, "ddp_probe", {cls: p ? (p.ok ? "good" : "bad") : "", extra: paused ? paused.note + (p ? ` · last real check: ${p.ok ? "OK" : "failed"} ${ago(p.time)}` : "") : ""})}
       ${kpi("Temp", tc == null ? "–" : `${f1(toUnit(tc))}<small>°${tUnit()}</small>`, tc != null ? (tUnit() === "F" ? `${f1(tc)} °C` : `${f1(tc * 9 / 5 + 32)} °F`) : "–", "board", {field: "temperature", cls: tc > warnC ? "warn" : "", extra: tc != null ? `${f1(tc)} °C / ${f1(tc * 9 / 5 + 32)} °F · warns above ${temp(warnC)}` : ""})}
       ${kpi("Uptime", dur(b.uptime), b.reboots ? `${b.reboots} reboot${b.reboots > 1 ? "s" : ""} seen` : "no reboots seen", "board", {field: "uptime", cls: b.reboots ? "warn" : ""})}
     </div>
     <div class="sparks">
-      <div data-src="icmp"><div class="cap"><span>ICMP RTT</span><span>last ${b.icmp_series?.length || 0}</span></div>${spark(b.icmp_series || [], "s1")}</div>
-      <div data-src="http_ping"><div class="cap"><span>HTTP /ping</span><span>last ${b.http_series?.length || 0}</span></div>${spark(b.http_series || [], "s2")}</div>
+      <div data-src="icmp"><div class="cap"><span>ICMP RTT</span><span>last ${b.icmp_series?.length || 0}</span></div>${spark(b.icmp_series || [], "s1", {id: b.name + ":icmp", times: b.icmp_times, label: "ICMP RTT", fmt: v => f2(v) + " ms", nullText: "no reply"})}</div>
+      <div data-src="http_ping"><div class="cap"><span>HTTP /ping</span><span>last ${b.http_series?.length || 0}</span></div>${spark(b.http_series || [], "s2", {id: b.name + ":http", times: b.http_times, label: "HTTP /ping", fmt: v => f2(v) + " ms", nullText: "failed"})}</div>
     </div>
     ${section(b.name, "net", "Network &amp; endpoints", `stats over the last ${esc(win)}`, net, false)}
     ${section(b.name, "ddp", "DDP &amp; streaming", `mode ${esc(b.probe_mode)}`, ddp, false)}
@@ -591,12 +691,12 @@ function historyBlock(name) {
       const ts = s.map(x => x.v?.temp == null ? x : {...x, v: {...x.v, temp: toUnit(x.v.temp)}});
       body = `
         <div class="note" style="margin-top:0">Reachable <b class="num">${pct(notDown / s.length)}</b> · fully healthy <b class="num">${pct(up / s.length)}</b> · ${s.length} samples</div>
-        ${strip(s, t0, t1)}
+        ${strip(s, t0, t1, name + ":strip")}
         <div class="charts">
-          <div class="chart">${chart(s, [{key: "icmp_p95", label: "ICMP p95", color: "s1"}, {key: "http_p95", label: "HTTP p95", color: "s2"}], v => f2(v) + " ms", t0, t1)}</div>
-          <div class="chart">${chart(s, [{key: "icmp_loss", label: "ICMP loss", color: "s1", scale: 100}, {key: "http_loss", label: "HTTP fail", color: "s2", scale: 100}, {key: "ws_down", label: "WS down", color: "down", scale: 100}], v => f1(v) + "%", t0, t1)}</div>
-          <div class="chart">${chart(ts, [{key: "temp", label: "Temp °" + tUnit(), color: "degraded"}], v => f1(v) + " °" + tUnit(), t0, t1)}</div>
-          <div class="chart">${chart(s, [{key: "fps", label: "Frame rate", color: "s3"}, {key: "ddp_dropped", label: "DDP dropped", color: "down"}], f1, t0, t1)}</div>
+          <div class="chart">${chart(s, [{key: "icmp_p95", label: "ICMP p95", color: "s1"}, {key: "http_p95", label: "HTTP p95", color: "s2"}], v => f2(v) + " ms", t0, t1, name + ":lat")}</div>
+          <div class="chart">${chart(s, [{key: "icmp_loss", label: "ICMP loss", color: "s1", scale: 100}, {key: "http_loss", label: "HTTP fail", color: "s2", scale: 100}, {key: "ws_down", label: "WS down", color: "down", scale: 100}], v => f1(v) + "%", t0, t1, name + ":loss")}</div>
+          <div class="chart">${chart(ts, [{key: "temp", label: "Temp °" + tUnit(), color: "degraded"}], v => f1(v) + " °" + tUnit(), t0, t1, name + ":temp")}</div>
+          <div class="chart">${chart(s, [{key: "fps", label: "Frame rate", color: "s3"}, {key: "ddp_dropped", label: "DDP dropped", color: "down"}], f1, t0, t1, name + ":fps")}</div>
         </div>
         ${evList}`;
     }
@@ -655,6 +755,7 @@ async function refresh() {
   $("#incBadge").textContent = open; $("#incBadge").classList.toggle("zero", !open);
   $("#meta").textContent = `Updated ${new Date().toLocaleTimeString()}`;
   refreshTip();
+  refreshChartTip();
 }
 
 // ---------- interactions ----------
@@ -880,7 +981,7 @@ function parseTL(tl) {
   }
   return r;
 }
-function tlChart(series, markers, t0, t1, fmt) {
+function tlChartSVG(series, markers, t0, t1, fmt) {
   const W = 400, H = 96, span = Math.max(t1 - t0, 1), x = t => ((t - t0) / span * W).toFixed(1);
   let max = 0;
   for (const se of series) for (const p of se.pts) if (p.v != null) max = Math.max(max, p.v);
@@ -945,10 +1046,10 @@ async function openIncident(id) {
         <table class="diag">${diagRows(i.diagnostics)}</table>` : ""}
       ${i.timeline?.length ? `<div class="dsec">Recorded telemetry (${dur((t1 - t0) / 1000)})</div>
         <div class="tlcharts">
-          <div class="tlchart">${tlChart([{label: "ICMP RTT", color: "s1", pts: tl.icmp, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms")}</div>
-          <div class="tlchart">${tlChart([{label: "HTTP /ping", color: "s2", pts: tl.http, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms")}</div>
-          <div class="tlchart">${tlChart([{label: "RAM free KB", color: "s3", pts: tl.ram}, {label: "Largest block KB", color: "s2", pts: tl.blk}], markers, t0, t1, f1)}</div>
-          <div class="tlchart">${tlChart([{label: "Temp °" + tUnit(), color: "degraded", pts: tl.temp}, {label: "fps", color: "s1", pts: tl.fps}], markers, t0, t1, f1)}</div>
+          <div class="tlchart">${tlChart([{label: "ICMP RTT", color: "s1", pts: tl.icmp, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms", "inc:icmp")}</div>
+          <div class="tlchart">${tlChart([{label: "HTTP /ping", color: "s2", pts: tl.http, lossMarks: true}], markers, t0, t1, v => f1(v) + " ms", "inc:http")}</div>
+          <div class="tlchart">${tlChart([{label: "RAM free KB", color: "s3", pts: tl.ram}, {label: "Largest block KB", color: "s2", pts: tl.blk}], markers, t0, t1, f1, "inc:ram")}</div>
+          <div class="tlchart">${tlChart([{label: "Temp °" + tUnit(), color: "degraded", pts: tl.temp}, {label: "fps", color: "s1", pts: tl.fps}], markers, t0, t1, f1, "inc:temp")}</div>
         </div>
         <div class="mk">${markers.map(m => `<span><span style="color:var(--${m.color})">┆</span> ${m.label} ${new Date(m.t).toLocaleTimeString()}</span>`).join("")}<span><span style="color:var(--down)">▮</span> no reply</span></div>` : `<p class="note">No raw telemetry was recorded for this incident.</p>`}
       ${i.before?.at ? `<div class="dsec">Board state</div><div class="scanwrap"><table class="diag snap"><tr style="color:var(--muted)"><td></td><td>At</td><td>Uptime</td><td>RAM free / largest</td><td>Temp</td><td>Streaming</td><td>Firmware</td></tr>${snap("Before", i.before)}${snap("After", i.after)}</table></div>` : ""}
@@ -1176,7 +1277,9 @@ function renderSettings() {
           ${fld("Probe offset", "ddp_probe.offset", "int", {unit: "bytes", help: "Must be past every configured channel so no pixel changes."})}
           ${fld("Packets per check", "ddp_probe.packets", "int")}
           ${fld("Rate", "ddp_probe.rate", "num", {unit: "packets/s"})}
-        </div>`;
+          ${fld("During shows", "ddp_probe.ignore_fpp", "bool", {check: "Probe even while FPP is playing or about to start", labelAbove: true, help: "Off (recommended): before probing, the monitor asks each FPP the board knows about and waits while it's playing or within 5 minutes of a scheduled show."})}
+        </div>
+        <p class="note">Probe packets never set DDP's PUSH flag and use sequence 0, so even if one overlaps a show it can't trigger an output frame or show up as dropped packets. A probe also stops the moment another DDP source appears.</p>`;
       break;
     case "rules":
       h = `<div class="form-grid">
