@@ -91,6 +91,9 @@ type ProbeConfig struct {
 	// it's playing (or about to) and holds probes until it's idle. Set to
 	// skip that check.
 	IgnoreFPP bool `json:"ignore_fpp,omitempty"`
+	// Boards on older firmware are never probed, only watched passively:
+	// v3.5.4 crashed on every probe. "none" probes any firmware.
+	MinFirmware string `json:"min_firmware,omitempty"`
 }
 
 type HistoryConfig struct {
@@ -243,6 +246,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DDPProbe.Rate <= 0 {
 		c.DDPProbe.Rate = 20
+	}
+	if c.DDPProbe.MinFirmware == "" {
+		c.DDPProbe.MinFirmware = "v3.8.9"
 	}
 	if c.History.RetentionDays <= 0 {
 		c.History.RetentionDays = 7

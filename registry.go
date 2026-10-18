@@ -70,6 +70,20 @@ func NewRegistry(ctx context.Context, cfg *Config, p *Pinger, fpps *FPPRegistry)
 
 func (r *Registry) Persistent() bool { return r.path != "" }
 
+// disableProbe saves "ddp_probe: off" for a board after a probe was followed
+// by a reboot, so the protection survives restarts.
+func (r *Registry) disableProbe(name string) {
+	b := r.Get(name)
+	if b == nil || b.cfg.DDPProbe == "off" {
+		return
+	}
+	bc := b.cfg
+	bc.DDPProbe = "off"
+	if _, err := r.Update(name, bc); err != nil {
+		log.Printf("[%s] couldn't save probe-off: %v", name, err)
+	}
+}
+
 // Reconfigure restarts every board monitor with a new config. History,
 // incidents and ongoing lockups carry over from disk; the in-memory flight
 // recorder starts fresh.
@@ -93,6 +107,8 @@ func (r *Registry) startLocked(bc BoardConfig) {
 	ctx, cancel := context.WithCancel(r.parent)
 	e := &entry{b: NewBoard(bc, r.cfg, r.pinger), cancel: cancel, done: make(chan struct{})}
 	e.b.fpps = r.fpps
+	name := bc.Name
+	e.b.onProbeTrip = func() { r.disableProbe(name) }
 	r.m[bc.Name] = e
 	r.order = append(r.order, bc.Name)
 	r.scheduleExpiryLocked(e.b, e.b.maint)

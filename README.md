@@ -65,6 +65,14 @@ and ignore a lone packet. `ddp_dropped` counts DDP sequence-number gaps.
 
 Set `ddp_probe` on a single board to override the mode for that board.
 
+**Probes and older firmware.** Probes only go to boards on
+`ddp_probe.min_firmware` or newer (default `v3.8.9`, the version they were
+tested on). On v3.5.4 every probe crashed the board within two seconds, so
+older or unknown firmware only gets passive checks (its stream counters are
+still watched). As a backstop, if a board ever reboots within seconds of a
+probe, the monitor turns probes off for that board permanently and logs why.
+Set `min_firmware` to `none` to probe everything.
+
 **Probes and live shows.** In `auto` mode, probes are built to stay out of
 a show's way:
 

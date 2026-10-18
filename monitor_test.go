@@ -304,3 +304,49 @@ func TestViewListsAreNeverNull(t *testing.T) {
 		t.Errorf("frame rate with no sources = %v, want 0", v.FrameRate)
 	}
 }
+
+func TestFirmwareAtLeast(t *testing.T) {
+	for _, c := range []struct {
+		fw, min string
+		ok      bool
+	}{
+		{"v3.8.9", "v3.8.9", true}, {"v3.10.0", "v3.8.9", true}, {"v3.5.4", "v3.8.9", false},
+		{"3.8.9-sim", "v3.8.9", true}, {"v4", "v3.8.9", true}, {"", "v3.8.9", false},
+		{"garbage", "v3.8.9", false}, {"v3.5.4", "none", true}, {"v3.8", "v3.8.9", false},
+	} {
+		if got := firmwareAtLeast(c.fw, c.min); got != c.ok {
+			t.Errorf("firmwareAtLeast(%q, %q) = %v, want %v", c.fw, c.min, got, c.ok)
+		}
+	}
+}
+
+// v3.5.4 boards crashed two seconds into every probe; the first such reboot
+// must switch probes off for good.
+func TestRebootRightAfterProbeTripsProbes(t *testing.T) {
+	b := testBoard(t)
+	tripped := make(chan struct{}, 1)
+	b.onProbeTrip = func() { tripped <- struct{}{} }
+	b.mergeState(stateJSON(780, "v3.5.4"), "ws")
+	b.mu.Lock()
+	b.rec.add("probe_start", map[string]any{"offset": 1000000})
+	b.mu.Unlock()
+	b.mergeState(stateJSON(0, "v3.5.4"), "ws") // rebooted just now
+	select {
+	case <-tripped:
+	case <-time.After(time.Second):
+		t.Fatal("probe trip wasn't persisted")
+	}
+	if !b.probeTripped || !strings.Contains(b.incidents[0].Cause, "DDP probe") {
+		t.Errorf("tripped=%v cause=%q", b.probeTripped, b.incidents[0].Cause)
+	}
+	// A reboot long after a probe isn't blamed on it.
+	b2 := testBoard(t)
+	b2.mergeState(stateJSON(780, "v3.8.9"), "ws")
+	b2.mu.Lock()
+	b2.rec.pts = append(b2.rec.pts, RecPoint{T: time.Now().Add(-45 * time.Second), K: "probe_start"})
+	b2.mu.Unlock()
+	b2.mergeState(stateJSON(0, "v3.8.9"), "ws")
+	if b2.probeTripped {
+		t.Error("tripped on a reboot 45s after a probe")
+	}
+}

@@ -1555,6 +1555,7 @@ function renderSettings() {
           ${fld("Probe offset", "ddp_probe.offset", "int", {unit: "bytes", help: "Must be past every configured channel so no pixel changes."})}
           ${fld("Packets per check", "ddp_probe.packets", "int")}
           ${fld("Rate", "ddp_probe.rate", "num", {unit: "packets/s"})}
+          ${fld("Probe only from firmware", "ddp_probe.min_firmware", "str", {ph: "v3.8.9", help: "Older boards get passive checks only: v3.5.4 crashed on every probe. \"none\" probes any firmware."})}
           ${fld("During shows", "ddp_probe.ignore_fpp", "bool", {check: "Probe even while FPP is playing or about to start", labelAbove: true, help: "Off (recommended): probes wait while an FPP that drives or is reported by the board is playing, or within 5 minutes of its next scheduled show."})}
         </div>
         <p class="note">Probe packets never set DDP's PUSH flag and use sequence 0, so even if one overlaps a show it can't trigger an output frame or show up as dropped packets. A probe also stops the moment another DDP source appears.</p>`;

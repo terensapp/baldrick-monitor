@@ -472,6 +472,10 @@ func (b *Board) onReboot(old *SystemState, prev *lastState, oldUptimeAt time.Tim
 		tl = b.rec.since(lastSeen.Add(-b.glob.Incidents.RecorderWindow.Duration))
 	}
 	b.analyzeReboot(inc, tl)
+	if f := b.checkProbeTrip(rebootAt); f != "" {
+		inc.Findings = append([]string{f}, inc.Findings...)
+		inc.Cause = "Likely the monitor's own DDP probe: the board rebooted seconds after one started. " + inc.Cause
+	}
 	b.incidents = append(b.incidents, inc)
 	b.persist(inc, tl)
 	b.addEvent(map[bool]string{true: "error", false: "info"}[inc.Kind == "unexpected"],

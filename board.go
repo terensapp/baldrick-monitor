@@ -167,6 +167,8 @@ type Board struct {
 	probeNow        chan struct{}
 
 	self         string  // our source address as the board sees it
+	probeTripped bool    // a probe was followed by a reboot; never probe again
+	onProbeTrip  func()  // persists the trip (set by the registry)
 	lowLogged    float64 // lowest free memory since boot, as last logged
 	rec          recorder
 	incidents    []*Incident
@@ -310,6 +312,9 @@ func (b *Board) mergeState(data []byte, src string) {
 				b.onReboot(&old, nil, prevUptimeAt, &st, now)
 				rebooted = true
 				b.lowLogged = st.RAMMinimum
+				// Record the new boot right away, so a restart of the
+				// monitor can't count this reboot a second time.
+				defer func() { go b.saveLastState() }()
 			}
 		}
 		if has("ram_minimum") && !rebooted {
@@ -350,6 +355,78 @@ func (b *Board) noteLowWater(low float64) {
 			Title:   b.cfg.Name + ": Low memory",
 			Message: fmt.Sprintf("The board's lowest free memory since boot has fallen to %.0f KB (warning below %.0f KB). On this board, a falling low-water mark came before repeated lockups; a reboot resets it.", low/1024, th/1024)})
 	}
+}
+
+// firmwareAtLeast compares versions like "v3.8.9" or "3.8.9-sim". Unknown
+// firmware never passes, so it is never probed; min "none" passes everything.
+func firmwareAtLeast(fw, min string) bool {
+	if min == "none" {
+		return true
+	}
+	parse := func(v string) []int {
+		v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+		var out []int
+		for _, part := range strings.SplitN(v, ".", 4) {
+			n, digits := 0, 0
+			for _, r := range part {
+				if r < '0' || r > '9' {
+					break
+				}
+				n, digits = n*10+int(r-'0'), digits+1
+			}
+			if digits == 0 {
+				break
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+	f, m := parse(fw), parse(min)
+	if len(f) == 0 {
+		return false
+	}
+	for i := 0; i < max(len(f), len(m)); i++ {
+		a, b := 0, 0
+		if i < len(f) {
+			a = f[i]
+		}
+		if i < len(m) {
+			b = m[i]
+		}
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+// checkProbeTrip turns probes off for good if the board rebooted within
+// seconds of one starting: on v3.5.4 every probe crashed the board (b.mu
+// held). It returns a finding for the reboot incident, or "".
+func (b *Board) checkProbeTrip(rebootAt time.Time) string {
+	if b.probeTripped {
+		return ""
+	}
+	for i := len(b.rec.pts) - 1; i >= 0; i-- {
+		p := b.rec.pts[i]
+		if p.K != "probe_start" {
+			continue
+		}
+		gap := rebootAt.Sub(p.T)
+		if gap < -5*time.Second || gap > 20*time.Second {
+			if gap > 20*time.Second {
+				return ""
+			}
+			continue
+		}
+		b.probeTripped = true
+		b.addEvent("error", "DDP probes turned off for this board: it rebooted %s after a probe started. Its firmware may not handle probe packets; stream counters are still watched", gap.Round(time.Second))
+		if b.onProbeTrip != nil {
+			go b.onProbeTrip()
+		}
+		return fmt.Sprintf("A monitor DDP probe started %s before it rebooted, so probes are now off for this board (set its DDP check back to auto to re-enable).", gap.Round(time.Second))
+	}
+	return ""
 }
 
 // ---- HTTP ----
@@ -716,7 +793,10 @@ func (b *Board) ddpLoop(ctx context.Context) {
 	t := time.NewTicker(b.glob.Intervals.DDPProbe.Duration)
 	defer t.Stop()
 	for {
-		if failing, _ := b.struggling(); !failing {
+		b.mu.RLock()
+		tripped := b.probeTripped
+		b.mu.RUnlock()
+		if failing, _ := b.struggling(); !failing && !tripped {
 			b.runProbe(ctx, mode)
 		}
 		select {
@@ -760,6 +840,16 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	}
 	// Don't inject while a show is playing or about to start, even in the
 	// gap between sequences.
+	// Never probe firmware the probe hasn't been proven safe on.
+	if fw, _, _ := st.firmware(); !firmwareAtLeast(fw, pc.MinFirmware) {
+		if fw == "" {
+			fw = "unknown"
+		}
+		res.Skipped = true
+		res.Note = fmt.Sprintf("probes are off for firmware %s: they only run from %s up (v3.5.4 crashed on every probe); live streams are still checked", fw, pc.MinFirmware)
+		b.finishProbe(res)
+		return
+	}
 	if mode != "always" && !pc.IgnoreFPP {
 		if busy := b.fpps.busyFor(b.cfg.Name, st.FPP); busy != "" {
 			res.Skipped, res.Note = true, busy

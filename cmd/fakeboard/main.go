@@ -205,8 +205,8 @@ func (s *sim) state() map[string]any {
 	return map[string]any{
 		"board_manufacturer": "Simulated", "board_model": s.model, "board_id": s.boardID,
 		"temperature": []float64{s.temp}, "last_settings_update": 1700000000,
-		"ota": map[string]any{"updatable": []any{map[string]any{"current_firmware_version": "v0.0.1-sim",
-			"current_factory_version": "sim", "available_firmware_version": "v0.0.1-sim"}}},
+		"ota": map[string]any{"updatable": []any{map[string]any{"current_firmware_version": "v3.8.9-sim",
+			"current_factory_version": "sim", "available_firmware_version": "v3.8.9-sim"}}},
 		"ram_available": s.ram, "ram_minimum": s.ram - 2000, "ram_largest_block": s.ram * 0.8,
 		"uptime": int(time.Since(s.boot).Seconds()), "oom_count": 0, "ui_messages": []any{},
 		"network_throughput": 0, "fpp": []any{map[string]any{"hostname": s.fppName, "ip": s.fppAddr, "sw_version": "9.5", "hardware": "simulator"}}, "frame_rate": fps, "test_mode_active": false, "fx_active": "",
