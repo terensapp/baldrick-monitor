@@ -32,7 +32,7 @@
     "rtt_warn_ms": 50,
     "ddp_loss_warn": 0.01,
     "temp_warn_c": 70,
-    "ram_min_warn_bytes": 20000
+    "ram_min_warn_bytes": 48000
   },
   "incidents": {
     "retention_days": 90,

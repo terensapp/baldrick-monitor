@@ -35,7 +35,7 @@ type Alert struct {
 }
 
 // AlertEvents are the events a channel can subscribe to.
-var AlertEvents = []string{"lockup", "reboot", "ddp", "recovered", "update"}
+var AlertEvents = []string{"lockup", "reboot", "ddp", "memory", "recovered", "update"}
 
 // Channel is one place alerts go.
 type Channel struct {

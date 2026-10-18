@@ -266,7 +266,7 @@ func (c *Config) applyDefaults() {
 		t.TempWarnC = 70
 	}
 	if t.RAMMinWarnBytes <= 0 {
-		t.RAMMinWarnBytes = 20_000
+		t.RAMMinWarnBytes = 48_000
 	}
 }
 

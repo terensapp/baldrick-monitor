@@ -1183,8 +1183,8 @@ $("#upGo").addEventListener("click", async () => {
 // ---------- settings ----------
 let SW = null, setTab = "notify";
 const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
-const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", recovered: "Recovered", update: "Monitor update available"};
-const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "recovered"];
+const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", memory: "Low memory", recovered: "Recovered", update: "Monitor update available"};
+const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "memory", "recovered"];
 const CH_TYPES = {
   discord: {label: "Discord", help: "In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL."},
   slack: {label: "Slack", help: "Create a Slack app with Incoming Webhooks enabled, add it to a channel, and paste its webhook URL."},

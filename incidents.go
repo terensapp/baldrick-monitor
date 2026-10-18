@@ -178,6 +178,12 @@ func (b *Board) persist(inc *Incident, tl []RecPoint) {
 	}
 }
 
+// saveMeta rewrites an incident's details (e.g. its acknowledgement)
+// without touching its stored timeline (b.mu held).
+func (b *Board) saveMeta(inc *Incident) {
+	b.persist(inc, b.storedTimeline(inc.ID))
+}
+
 // loadIncidents reads incident summaries from disk, dropping expired ones
 // and resuming any that were still ongoing.
 func (b *Board) loadIncidents() {
@@ -244,6 +250,21 @@ func (b *Board) Incident(id string) (*Incident, bool) {
 			if c.Ongoing && len(c.Timeline) > 0 {
 				c.Timeline = append(c.Timeline, b.rec.since(c.Timeline[len(c.Timeline)-1].T.Add(time.Nanosecond))...)
 			}
+			if !c.Ongoing {
+				// Older builds appended unrelated telemetry when an incident
+				// was acknowledged; keep only its own window.
+				end := c.DetectedAt
+				if c.ResolvedAt != nil {
+					end = *c.ResolvedAt
+				}
+				end = end.Add(2 * time.Minute)
+				for i, p := range c.Timeline {
+					if p.T.After(end) {
+						c.Timeline = c.Timeline[:i]
+						break
+					}
+				}
+			}
 			return &c, true
 		}
 	}
@@ -271,7 +292,7 @@ func (b *Board) SetAck(id string, ack *Ack) (Incident, error) {
 			continue
 		}
 		inc.Ack = ack
-		b.persist(inc, nil)
+		b.saveMeta(inc)
 		when := inc.StartedAt.Local().Format("Jan 2 15:04:05")
 		if ack != nil {
 			b.addEvent("info", "%s at %s acknowledged%s", inc.Title, when, noteSuffix(ack.Note))
@@ -295,7 +316,7 @@ func (b *Board) AckAll(ack Ack) int {
 		}
 		a := ack
 		inc.Ack = &a
-		b.persist(inc, nil)
+		b.saveMeta(inc)
 		n++
 	}
 	if n > 0 {

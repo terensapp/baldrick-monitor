@@ -273,3 +273,62 @@ func TestProbeOnlyStreamIsNotAShow(t *testing.T) {
 		t.Errorf("real show: ProbeOnly=%v FrameRate=%v", v.ProbeOnly, v.FrameRate)
 	}
 }
+
+func TestAckDoesNotAppendLaterTelemetry(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState(stateJSON(5000, "v1"), "ws")
+	b.mergeState(stateJSON(3, "v1"), "ws") // reboot incident
+	id := b.incidents[0].ID
+	before, _ := b.Incident(id)
+	b.mu.Lock()
+	for i := 0; i < 20; i++ { // much later, unrelated activity
+		b.rec.add("icmp", map[string]float64{"ms": 1})
+	}
+	b.mu.Unlock()
+	if _, err := b.SetAck(id, &Ack{At: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := b.Incident(id)
+	if len(after.Timeline) != len(before.Timeline) {
+		t.Errorf("acknowledging changed the timeline: %d -> %d points", len(before.Timeline), len(after.Timeline))
+	}
+}
+
+func TestLowWaterEarlyWarning(t *testing.T) {
+	b := testBoard(t)
+	mem := func(low int) []byte { return []byte(fmt.Sprintf(`{"uptime":100,"ram_minimum":%d}`, low)) }
+	b.mergeState(mem(83000), "ws")
+	b.mergeState(mem(80000), "ws") // small drop: quiet
+	b.mergeState(mem(70000), "ws") // >8 KB below the last logged value
+	b.mergeState(mem(45000), "ws") // below the 48 KB warning
+	var msgs []string
+	for _, e := range b.events {
+		if strings.HasPrefix(e.Msg, "Lowest free memory") {
+			msgs = append(msgs, e.Msg)
+		}
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("want 2 low-water events, got %q", msgs)
+	}
+	v := b.View()
+	found := false
+	for _, r := range v.Reasons {
+		found = found || strings.Contains(r, "RAM low-water")
+	}
+	if !found {
+		t.Errorf("no low-memory reason in %q", v.Reasons)
+	}
+}
+
+func TestViewListsAreNeverNull(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState([]byte(`{"uptime":100,"frame_rate":20,"streaming":{"ddp_sources":[]}}`), "ws")
+	v := b.View()
+	data, _ := json.Marshal(v)
+	if strings.Contains(string(data), `"incidents":null`) || strings.Contains(string(data), `"events":null`) {
+		t.Error("incidents/events serialised as null")
+	}
+	if v.FrameRate != 0 {
+		t.Errorf("frame rate with no sources = %v, want 0", v.FrameRate)
+	}
+}

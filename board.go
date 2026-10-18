@@ -166,7 +166,8 @@ type Board struct {
 	store           *store
 	probeNow        chan struct{}
 
-	self         string // our source address as the board sees it
+	self         string  // our source address as the board sees it
+	lowLogged    float64 // lowest free memory since boot, as last logged
 	rec          recorder
 	incidents    []*Incident
 	timelines    map[string][]RecPoint // incident timelines when there's no data dir
@@ -285,6 +286,7 @@ func (b *Board) mergeState(data []byte, src string) {
 	if !b.haveState {
 		fw, _, _ := st.firmware()
 		b.addEvent("info", "Found %s %s (id %s, firmware %s)", st.BoardManufacturer, st.BoardModel, st.BoardID, fw)
+		b.lowLogged = st.RAMMinimum
 		// Did it reboot while the monitor wasn't running?
 		if prev := b.prevRun; prev != nil && has("uptime") {
 			b.prevRun = nil
@@ -302,7 +304,11 @@ func (b *Board) mergeState(data []byte, src string) {
 			if st.Uptime+5 < old.Uptime || now.Add(-secs(st.Uptime)).Sub(oldBoot) > rebootGrace {
 				b.onReboot(&old, nil, prevUptimeAt, &st, now)
 				rebooted = true
+				b.lowLogged = st.RAMMinimum
 			}
+		}
+		if has("ram_minimum") && !rebooted {
+			b.noteLowWater(st.RAMMinimum)
 		}
 		if has("oom_count") && st.OOMCount > old.OOMCount {
 			b.addEvent("error", "Out-of-memory count rose to %.0f", st.OOMCount)
@@ -320,6 +326,25 @@ func (b *Board) mergeState(data []byte, src string) {
 		}
 	}
 	b.st, b.haveState, b.stateAt = st, true, time.Now()
+}
+
+// noteLowWater tracks the board's lowest free memory since boot. A falling
+// low-water mark was the clearest early sign of the lockups seen on a
+// Baldrick 8: it slid from 81 KB to 26 KB over a day of hourly lockups.
+// Each further 8 KB drop is logged, and crossing the warning threshold
+// alerts (b.mu held).
+func (b *Board) noteLowWater(low float64) {
+	if low <= 0 || b.lowLogged <= 0 || low > b.lowLogged-8192 {
+		return
+	}
+	prev := b.lowLogged
+	b.lowLogged = low
+	b.addEvent("warn", "Lowest free memory since boot fell to %.0f KB (was %.0f KB)", low/1024, prev/1024)
+	if th := b.glob.th().RAMMinWarnBytes; low < th && prev >= th {
+		b.glob.notify().Send(Alert{Event: "memory", Severity: "warn", Board: b.cfg.Name, Host: b.cfg.Host,
+			Title:   b.cfg.Name + ": Low memory",
+			Message: fmt.Sprintf("The board's lowest free memory since boot has fallen to %.0f KB (warning below %.0f KB). On this board, a falling low-water mark came before repeated lockups; a reboot resets it.", low/1024, th/1024)})
+	}
 }
 
 // ---- HTTP ----
@@ -988,6 +1013,10 @@ func (b *Board) View() BoardView {
 	if v.ProbeOnly {
 		v.FrameRate = 0
 	}
+	// With no stream at all, the board's frame-rate average is just decaying.
+	if len(v.DDP.Sources)+len(v.SACN.Sources)+len(v.ArtNet.Sources) == 0 {
+		v.FrameRate = 0
+	}
 	for k, e := range b.endpoints {
 		v.Endpoints[k] = *e
 	}
@@ -1014,6 +1043,12 @@ func (b *Board) View() BoardView {
 		}
 	}
 	v.IncidentTotal = len(b.incidents)
+	if v.Incidents == nil {
+		v.Incidents = []Incident{}
+	}
+	if v.Events == nil {
+		v.Events = []Event{}
+	}
 	v.Status, v.Reasons = b.health(&v)
 	return v
 }
