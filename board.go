@@ -174,6 +174,8 @@ type Board struct {
 	activeLockup *Incident
 	activeDDP    *Incident
 	ddpFails     int
+	activeShow   *Incident
+	showMissing  map[string]time.Time // FPP IP → when its stream was first missing during a show
 }
 
 func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
@@ -228,7 +230,7 @@ func (b *Board) probeMode() string {
 // Run monitors the board until ctx is cancelled and every loop has exited.
 func (b *Board) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	for _, loop := range []func(context.Context){b.icmpLoop, b.wsLoop, b.ddpLoop, b.rollupLoop, b.httpLoop} {
+	for _, loop := range []func(context.Context){b.icmpLoop, b.wsLoop, b.ddpLoop, b.showLoop, b.rollupLoop, b.httpLoop} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

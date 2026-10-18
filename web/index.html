@@ -284,7 +284,7 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
 
 <dialog id="dlgIncs" class="xl"><form method="dialog">
   <h3 id="ilTitle">Incidents</h3>
-  <p class="lead">Reboots, lockups and DDP failures the monitor has caught, kept <span id="ilKeep">90</span> days. Each one keeps the telemetry leading up to it.</p>
+  <p class="lead">Reboots, lockups, DDP failures and shows that didn't reach a board the monitor has caught, kept <span id="ilKeep">90</span> days. Each one keeps the telemetry leading up to it.</p>
   <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="tabs"><button type="button" data-iltab="open" class="on">Needs attention</button><button type="button" data-iltab="all">All</button></div><button class="btn sm" type="button" id="ilAckAll">Acknowledge all</button></div>
   <div class="dlgbody" id="ilOut"></div>
   <div class="foot"><button class="btn ghost" value="close">Close</button></div>
@@ -908,11 +908,11 @@ $("#btnAdd").addEventListener("click", () => openBoard());
 $("#btnScan").addEventListener("click", openScan);
 
 // ---------- incidents ----------
-const TYPE_LABEL = {reboot: "Reboot", lockup: "Lockup", ddp: "DDP", manual: "Capture"};
+const TYPE_LABEL = {reboot: "Reboot", lockup: "Lockup", ddp: "DDP", show_output: "Show output", manual: "Capture"};
 function incColor(i) {
   if (i.type === "manual") return "s3";
   if (i.ack && !i.ongoing) return "unknown";
-  if (i.type === "ddp" || (i.type === "reboot" && i.kind !== "unexpected")) return "degraded";
+  if (i.type === "ddp" || i.type === "show_output" || (i.type === "reboot" && i.kind !== "unexpected")) return "degraded";
   return "down";
 }
 const incTag = i => `<span class="tag" style="--ic:var(--${incColor(i)})">${TYPE_LABEL[i.type] || i.type}${i.ongoing ? " · ongoing" : ""}</span>`;
@@ -1183,8 +1183,8 @@ $("#upGo").addEventListener("click", async () => {
 // ---------- settings ----------
 let SW = null, setTab = "notify";
 const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
-const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", memory: "Low memory", recovered: "Recovered", update: "Monitor update available"};
-const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "memory", "recovered"];
+const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", show: "Show not reaching board", memory: "Low memory", recovered: "Recovered", update: "Monitor update available"};
+const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "show", "memory", "recovered"];
 const CH_TYPES = {
   discord: {label: "Discord", help: "In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL."},
   slack: {label: "Slack", help: "Create a Slack app with Incoming Webhooks enabled, add it to a channel, and paste its webhook URL."},

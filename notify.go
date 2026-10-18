@@ -23,7 +23,7 @@ import (
 
 // Alert is something worth pushing to a person.
 type Alert struct {
-	Event    string    `json:"event"` // lockup, reboot, ddp, recovered, update, test
+	Event    string    `json:"event"` // lockup, reboot, ddp, show, memory, recovered, update, test
 	Severity string    `json:"severity"`
 	Board    string    `json:"board"`
 	Host     string    `json:"host"`
@@ -35,7 +35,7 @@ type Alert struct {
 }
 
 // AlertEvents are the events a channel can subscribe to.
-var AlertEvents = []string{"lockup", "reboot", "ddp", "memory", "recovered", "update"}
+var AlertEvents = []string{"lockup", "reboot", "ddp", "show", "memory", "recovered", "update"}
 
 // Channel is one place alerts go.
 type Channel struct {
@@ -43,7 +43,7 @@ type Channel struct {
 	Name    string   `json:"name"`
 	Type    string   `json:"type"` // discord, slack, ntfy, webhook, email
 	Enabled bool     `json:"enabled"`
-	Events  []string `json:"events"` // empty = lockup, reboot, ddp, recovered
+	Events  []string `json:"events"` // empty = everything but update
 
 	URL   string `json:"url,omitempty"`   // discord/slack/webhook URL, ntfy topic URL
 	Token string `json:"token,omitempty"` // ntfy access token (optional)

@@ -10,6 +10,9 @@
 //	curl -XPOST localhost:8081/_sim/ddpstall       # stop counting DDP packets
 //	curl -XPOST 'localhost:8081/_sim/fpp?state=playing'  # its fake FPP plays a show
 //	curl -XPOST 'localhost:8081/_sim/fpp?start_in=120'   # ...or schedules one in 2 min
+//	curl -XPOST 'localhost:8081/_sim/fpp?state=playing&stream=0'  # plays, but its stream never arrives
+//	curl -XPOST 'localhost:8081/_sim/fpp?stream=1'       # ...until it does
+//	curl -XPOST 'localhost:8081/_sim/fpp?target=10.9.9.9' # point its outputs elsewhere
 //	curl -XPOST localhost:8081/_sim/reset          # back to normal
 package main
 
@@ -48,6 +51,8 @@ type sim struct {
 	conns      map[net.Conn]bool
 	fppState   string    // the fake FPP's status_name
 	fppStart   time.Time // its next scheduled show
+	fppStream  bool      // while playing, the board sees a stream from it
+	fppTarget  string    // where its DDP output points
 	listen     string
 }
 
@@ -56,6 +61,7 @@ func main() {
 	ddp := flag.String("ddp", "127.0.0.1:4048", "DDP UDP listen address (empty to disable)")
 	flag.Parse()
 	s := &sim{boot: time.Now(), ram: 115_000, temp: 30, ddpSrc: map[string]time.Time{}, window: time.Now(), conns: map[net.Conn]bool{}, fppState: "idle", listen: *listen}
+	s.fppTarget = fppHost(*listen)
 	go s.tick()
 	if *ddp != "" {
 		go s.ddpLoop(*ddp)
@@ -88,6 +94,14 @@ func main() {
 			st["scheduler"] = map[string]any{"nextPlaylist": map[string]any{"playlistName": "Halloween", "scheduledStartTime": s.fppStart.Unix()}}
 		}
 		s.json(w, st)
+	})
+	mux.HandleFunc("/api/channel/output/universeOutputs", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.json(w, map[string]any{"status": "OK", "channelOutputs": []any{map[string]any{
+			"enabled": 1, "type": "universes", "interface": "eth0", "startChannel": 1, "channelCount": -1,
+			"universes": []any{map[string]any{"active": 1, "address": s.fppTarget, "description": "fakeboard",
+				"startChannel": 1, "channelCount": 300, "type": 4, "id": 1}}}}})
 	})
 	log.Printf("fake board on http://%s (DDP %s)", *listen, *ddp)
 	log.Fatal(http.ListenAndServe(*listen, mux))
@@ -173,6 +187,10 @@ func (s *sim) tick() {
 				log.Print("sim: hang over, recovered")
 			}
 		}
+		if s.fppState == "playing" && s.fppStream && now.After(s.downUntil) && now.After(s.hangUntil) {
+			s.ddpSrc[fppHost(s.listen)] = now // the fake FPP's show stream
+			s.ddpRecvd += 40
+		}
 		if now.Sub(s.window) >= 5*time.Second { // the board's ~5s stats window
 			s.shownRecv, s.shownDrop, s.ddpRecvd, s.ddpDropped, s.window = s.ddpRecvd, s.ddpDropped, 0, 0, now
 		}
@@ -209,15 +227,23 @@ func (s *sim) control(w http.ResponseWriter, r *http.Request) {
 	case "ddpstall":
 		s.ddpStall = true
 	case "fpp":
-		if st := r.URL.Query().Get("state"); st != "" {
+		q := r.URL.Query()
+		if st := q.Get("state"); st != "" {
 			s.fppState = st
+			s.fppStream = st == "playing" // a healthy show reaches the board...
+		}
+		if v := q.Get("stream"); v != "" {
+			s.fppStream = v == "1" // ...unless told otherwise
+		}
+		if t := q.Get("target"); t != "" {
+			s.fppTarget = t
 		}
 		if in, _ := strconv.Atoi(r.URL.Query().Get("start_in")); in > 0 {
 			s.fppStart = time.Now().Add(time.Duration(in) * time.Second)
 		}
 	case "reset":
 		s.leak, s.hot, s.ddpStall, s.temp, s.ram, s.hangUntil = false, false, false, 30, 115_000, time.Time{}
-		s.fppState, s.fppStart = "idle", time.Time{}
+		s.fppState, s.fppStart, s.fppStream, s.fppTarget = "idle", time.Time{}, false, fppHost(s.listen)
 	default:
 		http.Error(w, "unknown mode", http.StatusNotFound)
 		return
@@ -365,4 +391,13 @@ func ioReadFull(r *bufio.Reader, p []byte) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// fppHost is the address the fake FPP streams from and targets: the
+// listen host, since the board and its FPP are the same process.
+func fppHost(listen string) string {
+	if h, _, err := net.SplitHostPort(listen); err == nil {
+		return h
+	}
+	return listen
 }

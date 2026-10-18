@@ -87,7 +87,20 @@ Events are logged when any of these happen:
 - a WebSocket drop;
 - a DDP check failure or recovery.
 
-## Incidents: reboots, lockups and DDP failures
+**Show output verification.** Probes pause during shows, so instead the
+monitor checks that the show actually reaches the board. Every 5 seconds it
+asks each FPP the board reports for its status (the same cached
+`/api/fppd/status` read as above, at most once per 20s), and, for an FPP
+that's playing, its channel outputs (`/api/channel/output/universeOutputs`,
+cached 5 minutes). If those outputs send DDP, unicast E1.31, unicast Art-Net
+or KiNET to the board's address (or its hostname), the board must list that
+FPP's IP among its stream sources. If it doesn't for 20 seconds, a **show
+output** incident opens; it resolves when the stream appears, or when FPP
+stops playing or no longer outputs to the board. Multicast E1.31 and Art-Net
+broadcast outputs can't be tied to one board and aren't checked. The monitor
+only ever sends FPP GET requests, and an FPP it can't reach is left alone.
+
+## Incidents: reboots, lockups, DDP failures and missing shows
 
 When something goes wrong, the monitor opens an **incident** and keeps the
 telemetry that led up to it. It keeps a rolling raw recorder (default 30
@@ -99,6 +112,7 @@ update, DDP check and event.
 | **Stopped responding** (lockup) | `/ping` fails `http_fail_down` times in a row (503s, timeouts, refused) | An immediate diagnostic sweep (TCP connect; every endpoint's status and error page; 5 pings) to separate "web server up but the firmware refuses (503)", "network stack alive but HTTP hung" and "nothing answers (power/network)". It stays open until HTTP works again and records whether it recovered on its own or only after a reboot. |
 | **Reboot** | The board's boot time (now − uptime) jumps forward, including reboots that happened while the monitor was down | Classified as *unexpected*, *firmware update* or *after a settings change* (the last two are auto-acknowledged). Findings cover how the board went quiet (instant crash vs hang vs long outage), memory and leak trends, temperature, active streams, crash loops, and any message the board shows after booting. |
 | **Not processing DDP** | Two DDP checks in a row fail while HTTP still works | The probe results and the board's stream counters. |
+| **Show output** | An FPP whose outputs include the board is playing, but the board hasn't listed that FPP as a stream source for 20s (not raised during a lockup) | FPP's full status and output config, the outputs aimed at the board, and the board's sources at the time, including any other controller it's receiving from instead. |
 | **Manual capture** | **Collect diagnostics now** in a board's ••• menu | The recorder plus a fresh sweep. Use it the moment something looks off. |
 
 An incident keeps the board **degraded** until you **Acknowledge** it, with
@@ -131,7 +145,8 @@ Set these up in **⚙ Settings → Notifications**. Add any number of channels:
 | **Webhook** | Any URL. The alert is POSTed as JSON. |
 
 Each channel picks its events: **stopped responding**, **unexpected
-reboot**, **DDP failure**, **recovered**, and optionally **monitor update
+reboot**, **DDP failure**, **show not reaching board**, **low memory**,
+**recovered**, and optionally **monitor update
 available**. **Send test** checks a channel before you save. Repeats of the
 same event for the same board are held back for 2 minutes, so a flapping
 board doesn't flood you. Set the **dashboard URL** so alerts link straight
@@ -215,6 +230,8 @@ curl -XPOST 'localhost:8081/_sim/hang?secs=60'  # 503 lockup (add &reboot=1 to e
 curl -XPOST localhost:8081/_sim/crash           # sudden crash + reboot
 curl -XPOST localhost:8081/_sim/leak            # heap drains until it crashes
 curl -XPOST localhost:8081/_sim/ddpstall        # stops counting DDP
+curl -XPOST 'localhost:8081/_sim/fpp?state=playing&stream=0'  # its FPP plays, stream never arrives
+curl -XPOST 'localhost:8081/_sim/fpp?stream=1'  # ...now it does
 curl -XPOST localhost:8081/_sim/reset
 ```
 
