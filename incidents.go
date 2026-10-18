@@ -373,14 +373,12 @@ func (b *Board) onReboot(old *SystemState, prev *lastState, oldUptimeAt time.Tim
 	after := snapshotOf(st, now)
 
 	var oldFW string
-	var oldSettings int64
 	lastSeen, prevUptime := b.stateAt, 0.0
 	if old != nil {
 		oldFW, _, _ = old.firmware()
-		oldSettings = old.LastSettingsUpdate
 		prevUptime = old.Uptime + b.stateAt.Sub(oldUptimeAt).Seconds()
 	} else {
-		oldFW, oldSettings, lastSeen, prevUptime = prev.Firmware, prev.Settings, prev.At, prev.Uptime
+		oldFW, lastSeen, prevUptime = prev.Firmware, prev.At, prev.Uptime
 	}
 	newFW, _, _ := st.firmware()
 
@@ -414,7 +412,10 @@ func (b *Board) onReboot(old *SystemState, prev *lastState, oldUptimeAt time.Tim
 		inc.Kind, inc.Title = "firmware_update", "Rebooted into new firmware "+newFW
 		inc.Cause = fmt.Sprintf("Firmware update from %s to %s.", oldFW, newFW)
 		inc.Ack = &Ack{At: now, Auto: true, Note: "Expected: firmware update"}
-	case oldSettings != 0 && st.LastSettingsUpdate != oldSettings || b.settingsChangedSince(rebootAt.Add(-5*time.Minute)):
+	// Only a settings change seen while the board was still running counts:
+	// last_settings_update also changes on every boot, so comparing it
+	// across the reboot would excuse every crash.
+	case b.settingsChangedSince(rebootAt.Add(-5 * time.Minute)):
 		inc.Kind, inc.Title = "settings_change", "Rebooted after a settings change"
 		inc.Cause = "The board's settings changed shortly before it rebooted, so this was probably intentional."
 		inc.Ack = &Ack{At: now, Auto: true, Note: "Probably intentional: followed a settings change"}

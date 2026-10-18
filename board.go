@@ -294,10 +294,12 @@ func (b *Board) mergeState(data []byte, src string) {
 		old := b.st
 		// A reboot shows up as the boot time (now - uptime) jumping forward,
 		// which also catches boards that were down longer than their uptime.
+		rebooted := false
 		if has("uptime") {
 			oldBoot := prevUptimeAt.Add(-secs(old.Uptime))
 			if st.Uptime+5 < old.Uptime || now.Add(-secs(st.Uptime)).Sub(oldBoot) > rebootGrace {
 				b.onReboot(&old, nil, prevUptimeAt, &st, now)
+				rebooted = true
 			}
 		}
 		if has("oom_count") && st.OOMCount > old.OOMCount {
@@ -307,7 +309,8 @@ func (b *Board) mergeState(data []byte, src string) {
 		if newFW, _, _ := st.firmware(); has("ota") && newFW != "" && newFW != oldFW {
 			b.addEvent("info", "Firmware changed: %s → %s", oldFW, newFW)
 		}
-		if has("last_settings_update") && st.LastSettingsUpdate != old.LastSettingsUpdate {
+		// The field also changes on every boot; that isn't a settings change.
+		if has("last_settings_update") && st.LastSettingsUpdate != old.LastSettingsUpdate && !rebooted {
 			b.addEvent("info", "Board settings were changed")
 		}
 		if has("ui_messages") && len(st.UIMessages) > len(old.UIMessages) {

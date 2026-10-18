@@ -22,9 +22,37 @@ func testBoard(t *testing.T) *Board {
 	return NewBoard(BoardConfig{Name: "t", Host: "127.0.0.1"}, cfg, nil)
 }
 
-func stateJSON(uptime float64, fw string) []byte {
+func stateJSON(uptime float64, fw string) []byte { return stateJSONSettings(uptime, fw, 1) }
+
+func stateJSONSettings(uptime float64, fw string, settings int64) []byte {
 	return []byte(fmt.Sprintf(`{"board_model":"Baldrick 8 Port v1","uptime":%v,"ram_available":110000,"ram_largest_block":90000,
-		"temperature":[30],"last_settings_update":1,"ota":{"updatable":[{"current_firmware_version":%q}]}}`, uptime, fw))
+		"temperature":[30],"last_settings_update":%d,"ota":{"updatable":[{"current_firmware_version":%q}]}}`, uptime, settings, fw))
+}
+
+// Baldrick boards report a new last_settings_update on every boot; that
+// alone must not make a crash look intentional.
+func TestRebootIsUnexpectedDespiteNewSettingsStamp(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState(stateJSONSettings(5000, "v1", 1481795442), "ws")
+	b.mergeState(stateJSONSettings(4, "v1", 1717911826), "poll")
+	if len(b.incidents) != 1 || b.incidents[0].Kind != "unexpected" || b.incidents[0].Ack != nil {
+		t.Fatalf("got %+v", b.incidents)
+	}
+	for _, e := range b.events {
+		if e.Msg == "Board settings were changed" {
+			t.Error("a reboot shouldn't log a settings change")
+		}
+	}
+}
+
+func TestRebootAfterSettingsChangeIsExpected(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState(stateJSONSettings(5000, "v1", 1), "ws")
+	b.mergeState(stateJSONSettings(5010, "v1", 2), "ws") // saved while running
+	b.mergeState(stateJSONSettings(3, "v1", 3), "poll")
+	if len(b.incidents) != 1 || b.incidents[0].Kind != "settings_change" {
+		t.Fatalf("got %+v", b.incidents)
+	}
 }
 
 func TestRebootWhenUptimeDrops(t *testing.T) {
