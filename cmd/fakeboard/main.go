@@ -35,6 +35,11 @@ import (
 
 type sim struct {
 	mu         sync.Mutex
+	hostname   string // identity, so a multi-board demo looks like a display
+	model      string
+	boardID    string
+	fppAddr    string // the FPP this board reports (default: itself)
+	fppName    string
 	boot       time.Time
 	ram, temp  float64
 	leak, hot  bool
@@ -62,8 +67,20 @@ type sim struct {
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8081", "HTTP listen address")
 	ddp := flag.String("ddp", "127.0.0.1:4048", "DDP UDP listen address (empty to disable)")
+	hostname := flag.String("hostname", "fakeboard", "hostname the board reports")
+	model := flag.String("model", "Baldrick Simulator", "board model it reports")
+	id := flag.String("id", "fake0001", "board id it reports")
+	ram := flag.Float64("ram", 115_000, "free heap it starts with, in bytes")
+	temp := flag.Float64("temp", 30, "temperature it reports, in °C")
+	fpp := flag.String("fpp", "", "address of the FPP it reports (default: its own, acting as FPP)")
+	fppName := flag.String("fppname", "fakefpp", "hostname of the FPP it reports and plays")
+	fppListen := flag.String("fpplisten", "", "also answer FPP's API on this address (pair with -fpp)")
 	flag.Parse()
-	s := &sim{boot: time.Now(), ram: 115_000, temp: 30, ddpSrc: map[string]time.Time{}, window: time.Now(), conns: map[net.Conn]bool{}, fppState: "idle", listen: *listen}
+	s := &sim{boot: time.Now(), ram: *ram, temp: *temp, ddpSrc: map[string]time.Time{}, window: time.Now(), conns: map[net.Conn]bool{}, fppState: "idle", listen: *listen,
+		hostname: *hostname, model: *model, boardID: *id, fppAddr: *fpp, fppName: *fppName}
+	if s.fppAddr == "" {
+		s.fppAddr = *listen
+	}
 	s.fppTarget = fppHost(*listen)
 	go s.tick()
 	if *ddp != "" {
@@ -73,7 +90,7 @@ func main() {
 	mux.HandleFunc("/ping", s.guard(func(w http.ResponseWriter, r *http.Request) { s.json(w, map[string]any{}) }))
 	mux.HandleFunc("/system_state", s.guard(func(w http.ResponseWriter, r *http.Request) { s.json(w, s.state()) }))
 	mux.HandleFunc("/settings", s.guard(func(w http.ResponseWriter, r *http.Request) {
-		s.json(w, map[string]any{"hostname": "fakeboard", "ports": []any{
+		s.json(w, map[string]any{"hostname": s.hostname, "ports": []any{
 			map[string]any{"port_type": "pixel", "models": []any{map[string]any{"name": "Test", "num_channels": 300}}},
 			map[string]any{"port_type": "pixel", "models": []any{}}}})
 	}))
@@ -89,7 +106,7 @@ func main() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		st := map[string]any{"status_name": s.fppState, "current_sequence": "", "current_playlist": map[string]string{"playlist": ""},
-			"host_name": "fakefpp", "version": "9.5.3-sim", "platform": "Simulator", "mode_name": "player", "channelOutputsEnabled": true,
+			"host_name": s.fppName, "version": "9.5.3-sim", "platform": "Simulator", "mode_name": "player", "channelOutputsEnabled": true,
 			"seconds_remaining": "0",
 			"scheduler":         map[string]any{"nextPlaylist": map[string]any{"playlistName": "", "scheduledStartTime": 0}}}
 		if s.fppState != "idle" {
@@ -112,6 +129,9 @@ func main() {
 				"startChannel": 1, "channelCount": 300, "type": 4, "id": 1}}}}})
 	}))
 	log.Printf("fake board on http://%s (DDP %s)", *listen, *ddp)
+	if *fppListen != "" {
+		go func() { log.Fatal(http.ListenAndServe(*fppListen, mux)) }()
+	}
 	log.Fatal(http.ListenAndServe(*listen, mux))
 }
 
@@ -183,13 +203,13 @@ func (s *sim) state() map[string]any {
 		fps = s.shownRecv / 5
 	}
 	return map[string]any{
-		"board_manufacturer": "Fake", "board_model": "Baldrick Simulator", "board_id": "fake0001",
+		"board_manufacturer": "Simulated", "board_model": s.model, "board_id": s.boardID,
 		"temperature": []float64{s.temp}, "last_settings_update": 1700000000,
 		"ota": map[string]any{"updatable": []any{map[string]any{"current_firmware_version": "v0.0.1-sim",
 			"current_factory_version": "sim", "available_firmware_version": "v0.0.1-sim"}}},
 		"ram_available": s.ram, "ram_minimum": s.ram - 2000, "ram_largest_block": s.ram * 0.8,
 		"uptime": int(time.Since(s.boot).Seconds()), "oom_count": 0, "ui_messages": []any{},
-		"network_throughput": 0, "fpp": []any{map[string]any{"hostname": "fakefpp", "ip": s.listen, "sw_version": "9.5", "hardware": "simulator"}}, "frame_rate": fps, "test_mode_active": false, "fx_active": "",
+		"network_throughput": 0, "fpp": []any{map[string]any{"hostname": s.fppName, "ip": s.fppAddr, "sw_version": "9.5", "hardware": "simulator"}}, "frame_rate": fps, "test_mode_active": false, "fx_active": "",
 		"streaming": map[string]any{"ddp_sources": srcs, "ddp_recvd": s.shownRecv, "ddp_dropped": s.shownDrop,
 			"sacn_sources": []string{}, "sacn_recvd": 0, "sacn_dropped": 0, "artnet_sources": []string{}, "artnet_recvd": 0, "artnet_dropped": 0},
 	}
@@ -219,7 +239,7 @@ func (s *sim) tick() {
 			}
 		}
 		if s.fppState == "playing" && s.fppStream && now.After(s.downUntil) && now.After(s.hangUntil) {
-			s.ddpSrc[fppHost(s.listen)] = now // the fake FPP's show stream
+			s.ddpSrc[fppHost(s.fppAddr)] = now // the fake FPP's show stream, from the FPP it reports
 			s.ddpRecvd += 40
 		}
 		if now.Sub(s.window) >= 5*time.Second { // the board's ~5s stats window

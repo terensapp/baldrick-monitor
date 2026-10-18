@@ -5,6 +5,25 @@ that each board is alive, serving HTTP, and processing DDP, and tracks latency,
 jitter and board health. It serves a web dashboard, a JSON API and Prometheus
 metrics. It is a single static Go binary with no dependencies.
 
+![A click-through of the dashboard: live board cards, chart hover, an incident's recorded telemetry, and the settings](docs/images/tour.gif)
+
+## Screenshots
+
+These come from the built-in simulator (`cmd/fakeboard`): three simulated
+boards and a simulated FPP running a show, with a staged lockup, crash and
+maintenance window. The history is generated.
+
+| | |
+|---|---|
+| ![Dashboard with an FPP show running, a lockup banner, a board in maintenance, and history charts with the show period shaded](docs/images/dashboard.png) | ![The same dashboard in dark mode](docs/images/dashboard-dark.png) |
+| **Dashboard.** Fleet summary, "show running" bar, the FPP and which boards are receiving it, one card per board. | **Dark mode** follows your system setting. |
+| ![Hovering a history chart shows the time and values under the cursor](docs/images/history-hover.png) | ![An incident: likely cause, timings, findings and the diagnostic sweep](docs/images/incident.png) |
+| **Hover any chart** for exact times and values. | **Incidents** explain what happened and how the board failed, with a diagnostic sweep taken while it was failing. |
+| ![The telemetry recorded before and during the incident, with start, reboot and recovery marked](docs/images/incident-telemetry.png) | ![Notification settings with Discord, ntfy and email channels](docs/images/settings-notifications.png) |
+| **Recorded telemetry** from before and during the incident, ready to export. | **Notifications** to Discord, Slack, email, ntfy or any webhook, each with its own events. |
+| ![The FPP settings tab listing an auto-discovered FPP](docs/images/settings-fpp.png) | |
+| **FPPs** are found automatically from what your boards report, or added by hand. | |
+
 ## What it checks
 
 | Check | How | Kind |
@@ -376,6 +395,9 @@ arm64:
 | `main` | every push to `main` |
 | `sha-<commit>` | that commit |
 | `latest`, `X.Y`, `X.Y.Z` | release tags `vX.Y.Z` |
+
+A push that only changes docs, deploy scripts, the simulator or the workflow
+runs the tests but doesn't publish an image, so it won't appear as an update.
 
 On the host, from a checkout of this repo:
 
