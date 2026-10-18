@@ -78,7 +78,7 @@ func (r *Registry) Reconfigure(cfg *Config) {
 	r.cfg = cfg
 	var boards []BoardConfig
 	for _, n := range r.order {
-		boards = append(boards, r.m[n].b.cfg)
+		boards = append(boards, r.m[n].b.config())
 	}
 	for _, bc := range boards {
 		r.stopLocked(bc.Name)
@@ -93,6 +93,7 @@ func (r *Registry) startLocked(bc BoardConfig) {
 	e := &entry{b: NewBoard(bc, r.cfg, r.pinger), cancel: cancel, done: make(chan struct{})}
 	r.m[bc.Name] = e
 	r.order = append(r.order, bc.Name)
+	r.scheduleExpiryLocked(e.b, e.b.maint)
 	go func() {
 		defer close(e.done)
 		e.b.Run(ctx)
@@ -116,7 +117,7 @@ func (r *Registry) saveLocked() error {
 	}
 	list := make([]BoardConfig, 0, len(r.order))
 	for _, n := range r.order {
-		list = append(list, r.m[n].b.cfg)
+		list = append(list, r.m[n].b.config())
 	}
 	data, _ := json.MarshalIndent(list, "", "  ")
 	tmp := r.path + ".tmp"
@@ -189,6 +190,8 @@ func (r *Registry) Update(name string, bc BoardConfig) (BoardConfig, error) {
 		return bc, err
 	}
 	pos := slices.Index(r.order, name)
+	// Editing a board keeps its maintenance window; that has its own endpoint.
+	bc.Maintenance = r.m[name].b.config().Maintenance
 	old := r.stopLocked(name)
 	if bc.Name != name && old.b.store.dir != "" {
 		newDir := filepath.Join(r.cfg.History.DataDir, unsafeChars.ReplaceAllString(bc.Name, "_"))

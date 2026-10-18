@@ -174,6 +174,7 @@ type Board struct {
 	activeLockup *Incident
 	activeDDP    *Incident
 	ddpFails     int
+	maint        *Maintenance // b.cfg.Maintenance is only the starting value
 }
 
 func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
@@ -203,6 +204,7 @@ func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
 		store:       openStore(glob.History.DataDir, cfg.Name, glob.retention()),
 		rec:         recorder{window: glob.Incidents.RecorderWindow.Duration},
 		timelines:   map[string][]RecPoint{},
+		maint:       cfg.Maintenance,
 	}
 	b.loadIncidents()
 	b.prevRun = b.loadLastState()
@@ -341,7 +343,7 @@ func (b *Board) noteLowWater(low float64) {
 	b.lowLogged = low
 	b.addEvent("warn", "Lowest free memory since boot fell to %.0f KB (was %.0f KB)", low/1024, prev/1024)
 	if th := b.glob.th().RAMMinWarnBytes; low < th && prev >= th {
-		b.glob.notify().Send(Alert{Event: "memory", Severity: "warn", Board: b.cfg.Name, Host: b.cfg.Host,
+		b.send(Alert{Event: "memory", Severity: "warn", Board: b.cfg.Name, Host: b.cfg.Host,
 			Title:   b.cfg.Name + ": Low memory",
 			Message: fmt.Sprintf("The board's lowest free memory since boot has fallen to %.0f KB (warning below %.0f KB). On this board, a falling low-water mark came before repeated lockups; a reboot resets it.", low/1024, th/1024)})
 	}
@@ -894,8 +896,10 @@ type PortView struct {
 type BoardView struct {
 	Name    string   `json:"name"`
 	Host    string   `json:"host"`
-	Status  string   `json:"status"` // up, degraded, down, unknown
+	Status  string   `json:"status"` // up, degraded, down, unknown, maintenance
 	Reasons []string `json:"reasons"`
+	// Set while alerts for the board are silenced.
+	Maintenance *Maintenance `json:"maintenance"`
 
 	Hostname          string                 `json:"hostname"`
 	Manufacturer      string                 `json:"manufacturer"`
@@ -1050,6 +1054,12 @@ func (b *Board) View() BoardView {
 		v.Events = []Event{}
 	}
 	v.Status, v.Reasons = b.health(&v)
+	if m := b.maintenanceLocked(time.Now()); m != nil {
+		mc := *m
+		v.Maintenance = &mc
+		// Keep the reasons so whoever is working on it can see what's wrong.
+		v.Status = "maintenance"
+	}
 	return v
 }
 

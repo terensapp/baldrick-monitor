@@ -332,11 +332,26 @@ func noteSuffix(n string) string {
 	return ": " + n
 }
 
+// alert notifies about an incident (b.mu held), unless the board is in
+// maintenance or the incident was opened during maintenance.
 func (b *Board) alert(inc *Incident, event, severity, msg string) {
-	b.glob.notify().Send(Alert{
+	if event == "recovered" && inc.Ack != nil && inc.Ack.Auto && inc.Ack.Note == maintenanceAckNote {
+		return // nobody was told it started
+	}
+	b.send(Alert{
 		Event: event, Severity: severity, Board: b.cfg.Name, Host: b.cfg.Host,
 		Title: fmt.Sprintf("%s: %s", b.cfg.Name, inc.Title), Message: msg, Incident: inc.ID,
 	})
+}
+
+// send passes a board's alert to the notifier unless the board is in
+// maintenance (b.mu held). Quiet hours are up to the notifier.
+func (b *Board) send(a Alert) {
+	if b.maintenanceLocked(time.Now()) != nil {
+		log.Printf("[%s] alert %s suppressed (maintenance)", b.cfg.Name, a.Event)
+		return
+	}
+	b.glob.notify().Send(a)
 }
 
 // ======== last-seen state (reboots while the monitor was down) ========
@@ -442,6 +457,7 @@ func (b *Board) onReboot(old *SystemState, prev *lastState, oldUptimeAt time.Tim
 		inc.Ack = &Ack{At: now, Auto: true, Note: "Probably intentional: followed a settings change"}
 	default:
 		inc.Kind, inc.Title = "unexpected", "Unexpected reboot"
+		b.maintenanceAck(inc, now)
 	}
 
 	var tl []RecPoint
@@ -509,6 +525,7 @@ func (b *Board) startLockup(ctx context.Context, firstErr error) {
 		inc.Before = snapshotOf(&b.st, b.stateAt)
 	}
 	tl := b.rec.since(inc.StartedAt.Add(-b.glob.Incidents.RecorderWindow.Duration))
+	b.maintenanceAck(inc, now)
 	b.activeLockup = inc
 	b.incidents = append(b.incidents, inc)
 	b.persist(inc, tl)
@@ -633,6 +650,7 @@ func (b *Board) noteDDP(res DDPProbe) {
 	}
 	inc.Cause = "The board answers HTTP but did not count DDP packets in two checks in a row: " + res.Note
 	inc.Findings = append(inc.Findings, b.leadUpFindings(inc, b.rec.since(now.Add(-b.glob.Incidents.RecorderWindow.Duration)), now)...)
+	b.maintenanceAck(inc, now)
 	b.activeDDP = inc
 	b.incidents = append(b.incidents, inc)
 	b.persist(inc, b.rec.since(now.Add(-b.glob.Incidents.RecorderWindow.Duration)))

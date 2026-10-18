@@ -222,6 +222,31 @@ func main() {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
+	mux.HandleFunc("PUT /api/boards/{name}/maintenance", admin(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Duration string `json:"duration"` // "" = until turned off
+			Note     string `json:"note"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		var d time.Duration
+		if body.Duration != "" {
+			var err error
+			if d, err = time.ParseDuration(body.Duration); err != nil || d <= 0 {
+				httpError(w, http.StatusBadRequest, errBadMaintenance)
+				return
+			}
+		}
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		m, err := reg.SetMaintenance(r.PathValue("name"), true, d, body.Note, host)
+		maintenanceReply(w, m, err)
+	}))
+	mux.HandleFunc("DELETE /api/boards/{name}/maintenance", admin(func(w http.ResponseWriter, r *http.Request) {
+		_, err := reg.SetMaintenance(r.PathValue("name"), false, 0, "", "")
+		maintenanceReply(w, nil, err)
+	}))
 	mux.HandleFunc("GET /api/boards/{name}/history", func(w http.ResponseWriter, r *http.Request) {
 		b := board(w, r)
 		if b == nil {
@@ -404,6 +429,19 @@ func suggestedSubnets(reg *Registry) []string {
 		}
 	}
 	return out
+}
+
+func maintenanceReply(w http.ResponseWriter, m *Maintenance, err error) {
+	switch {
+	case errors.Is(err, errNotFound):
+		httpError(w, http.StatusNotFound, err)
+	case errors.Is(err, errBadMaintenance):
+		httpError(w, http.StatusBadRequest, err)
+	case err != nil:
+		httpError(w, http.StatusInternalServerError, err)
+	default:
+		writeJSON(w, map[string]any{"maintenance": m})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

@@ -61,6 +61,8 @@ type BoardConfig struct {
 	Host string `json:"host"`
 	// Per-board override of ddp_probe.mode.
 	DDPProbe string `json:"ddp_probe,omitempty"`
+	// Set while the board is in maintenance (alerts silenced).
+	Maintenance *Maintenance `json:"maintenance,omitempty"`
 }
 
 // Intervals covers everything the monitor polls. Values that the board
@@ -140,6 +142,8 @@ type Config struct {
 	DashboardURL  string        `json:"dashboard_url"`
 	Updates       UpdatesConfig `json:"updates"`
 	Thresholds    Thresholds    `json:"thresholds"`
+	// Hold notifications overnight (or whenever) and summarise them after.
+	QuietHours QuietHours `json:"quiet_hours"`
 
 	live *liveHolder // settings applied without restarting monitoring
 }
@@ -159,8 +163,16 @@ func (c *Config) publishLive() {
 	if c.live == nil {
 		c.live = &liveHolder{}
 	}
-	c.live.Store(&liveSettings{thresholds: c.Thresholds, unit: c.TemperatureUnit, token: c.AdminToken,
-		notifier: NewNotifier(slices.Clone(c.Notifications), c.DashboardURL)})
+	n := NewNotifier(slices.Clone(c.Notifications), c.DashboardURL)
+	q := c.QuietHours
+	q.Days = slices.Clone(q.Days)
+	n.quiet = &q
+	var old *Notifier
+	if cur := c.live.Load(); cur != nil {
+		old = cur.notifier
+	}
+	c.live.Store(&liveSettings{thresholds: c.Thresholds, unit: c.TemperatureUnit, token: c.AdminToken, notifier: n})
+	n.adoptHeld(old.takeHeld())
 }
 
 func (c *Config) th() Thresholds    { return c.live.Load().thresholds }
@@ -289,6 +301,9 @@ func (c *Config) validate() error {
 			c.Notifications[i].ID = newChannelID()
 		}
 		ids[c.Notifications[i].ID] = true
+	}
+	if err := c.QuietHours.normalize(); err != nil {
+		return err
 	}
 	if err := validMode(c.DDPProbe.Mode); err != nil {
 		return err
