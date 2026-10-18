@@ -350,3 +350,18 @@ func TestRebootRightAfterProbeTripsProbes(t *testing.T) {
 		t.Error("tripped on a reboot 45s after a probe")
 	}
 }
+
+// pixel1 sends partial "streaming" updates; earlier fields must survive.
+func TestPartialNestedUpdatesMerge(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState([]byte(`{"uptime":100,"streaming":{"ddp_sources":["192.168.6.100"],"ddp_recvd":300}}`), "ws")
+	b.mergeState([]byte(`{"streaming":{"ddp_recvd":597,"ddp_dropped":0}}`), "ws")
+	v := b.View()
+	if len(v.DDP.Sources) != 1 || v.DDP.Sources[0] != "192.168.6.100" || v.DDP.Recvd != 597 {
+		t.Errorf("after a partial update: sources=%v recvd=%v", v.DDP.Sources, v.DDP.Recvd)
+	}
+	b.mergeState([]byte(`{"streaming":{"ddp_sources":[]}}`), "ws") // stream ended
+	if v := b.View(); len(v.DDP.Sources) != 0 {
+		t.Errorf("an explicit empty source list should clear it, got %v", v.DDP.Sources)
+	}
+}

@@ -279,7 +279,7 @@ func (b *Board) mergeState(data []byte, src string) {
 	now := time.Now()
 	prevUptimeAt := b.fieldAt["uptime"].At
 	for k, v := range delta {
-		b.raw[k] = v
+		b.raw[k] = mergeJSON(b.raw[k], v)
 		b.fieldAt[k] = FieldUpdate{Src: src, At: now}
 	}
 	b.rec.add("state", json.RawMessage(fmt.Sprintf(`{"src":%q,"d":%s}`, src, data)))
@@ -427,6 +427,24 @@ func (b *Board) checkProbeTrip(rebootAt time.Time) string {
 		return fmt.Sprintf("A monitor DDP probe started %s before it rebooted, so probes are now off for this board (set its DDP check back to auto to re-enable).", gap.Round(time.Second))
 	}
 	return ""
+}
+
+// mergeJSON overlays an update onto the previous value. Boards send partial
+// nested objects (a "streaming" update may carry the packet counts but not
+// the source list), so objects merge key by key instead of being replaced.
+func mergeJSON(old, upd json.RawMessage) json.RawMessage {
+	var o, u map[string]json.RawMessage
+	if len(old) == 0 || json.Unmarshal(old, &o) != nil || o == nil || json.Unmarshal(upd, &u) != nil || u == nil {
+		return upd
+	}
+	for k, v := range u {
+		o[k] = mergeJSON(o[k], v)
+	}
+	out, err := json.Marshal(o)
+	if err != nil {
+		return upd
+	}
+	return out
 }
 
 // ---- HTTP ----
