@@ -166,6 +166,7 @@ type Board struct {
 	store           *store
 	probeNow        chan struct{}
 
+	self         string // our source address as the board sees it
 	rec          recorder
 	incidents    []*Incident
 	timelines    map[string][]RecPoint // incident timelines when there's no data dir
@@ -204,6 +205,7 @@ func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
 	}
 	b.loadIncidents()
 	b.prevRun = b.loadLastState()
+	b.self = localIP(hostOnly(cfg.Host))
 	since := time.Now().Add(-glob.retention())
 	b.events = loadLines(b.store, "events", time.Now(), func(e *Event) bool { return e.Time.After(since) })
 	b.history = loadLines(b.store, "samples", time.Now(), func(s *Sample) bool { return s.T.After(since) })
@@ -710,7 +712,7 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 		b.finishProbe(res)
 		return
 	}
-	local := localIP(hostOnly(b.cfg.Host))
+	local := b.self
 	var foreign []string
 	for _, s := range st.Streaming.DDPSources {
 		if s != local {
@@ -916,6 +918,7 @@ type BoardView struct {
 	ArtNet            StreamStats       `json:"artnet"`
 	FrameRate         float64           `json:"frame_rate"`
 	NetworkThroughput float64           `json:"network_throughput"`
+	ProbeOnly         bool              `json:"probe_only"` // the only DDP source is our own probe
 	ProbeMode         string            `json:"probe_mode"`
 	ProbeOverride     string            `json:"ddp_probe"` // this board's own setting; "" = default
 	Probe             *DDPProbe         `json:"probe"`
@@ -962,6 +965,7 @@ func (b *Board) View() BoardView {
 		ArtNet:            StreamStats{st.Streaming.ArtNetRecvd, st.Streaming.ArtNetDropped, st.Streaming.ArtNetSources},
 		FrameRate:         st.FrameRate,
 		NetworkThroughput: st.NetworkThroughput,
+		ProbeOnly:         len(st.Streaming.DDPSources) > 0 && !slices.ContainsFunc(st.Streaming.DDPSources, func(s string) bool { return s != b.self }),
 		ProbeMode:         b.probeMode(),
 		ProbeOverride:     b.cfg.DDPProbe,
 		ProbeCounts:       map[string]uint64{"ok": b.probeCounts["ok"], "fail": b.probeCounts["fail"]},
@@ -979,6 +983,10 @@ func (b *Board) View() BoardView {
 	if b.probeSkip != nil {
 		p := *b.probeSkip
 		v.ProbePaused = &p
+	}
+	// The board counts our probe packets as frames; that isn't a show.
+	if v.ProbeOnly {
+		v.FrameRate = 0
 	}
 	for k, e := range b.endpoints {
 		v.Endpoints[k] = *e
@@ -1195,8 +1203,10 @@ func (v BoardView) sample() Sample {
 		put("ram_available", v.RAMAvailable, true)
 		put("ram_minimum", v.RAMMinimum, true)
 		put("fps", v.FrameRate, true)
-		put("ddp_recvd", v.DDP.Recvd, true)
-		put("ddp_dropped", v.DDP.Dropped, true)
+		if !v.ProbeOnly {
+			put("ddp_recvd", v.DDP.Recvd, true)
+			put("ddp_dropped", v.DDP.Dropped, true)
+		}
 	}
 	ws := 0.0
 	if !v.WSConnected {

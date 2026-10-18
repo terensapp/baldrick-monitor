@@ -616,8 +616,8 @@ function live(b) {
       ${stat("Detect time", p && p.ok && !p.passive ? f1(p.detect_ms / 1000) + " s" : "–", "ddp_probe", {extra: "Time from first probe packet until the board's counters showed it. The board publishes counters in ~5s windows, so a few seconds is normal."})}
       ${stat("Received", f1(b.ddp.recvd), "stream", {field: "streaming", extra: "Packets in the board's current window"})}
       ${stat("Dropped", f1(b.ddp.dropped) + (dropRatio ? ` (${pct(dropRatio)})` : ""), "stream", {field: "streaming", cls: b.ddp.dropped > 0 ? "warn" : "", extra: "Sequence-number gaps the board detected"})}
-      ${stat("Sources", b.ddp.sources?.length ? esc(b.ddp.sources.join(", ")) : "none", "stream", {field: "streaming"})}
-      ${stat("Frame rate", f1(b.frame_rate) + " fps", "board", {field: "frame_rate"})}
+      ${stat("Sources", b.probe_only ? "monitor probe" : b.ddp.sources?.length ? esc(b.ddp.sources.join(", ")) : "none", "stream", {field: "streaming", extra: b.probe_only ? `${b.ddp.sources.join(", ")} is this monitor's DDP check; no show is streaming.` : ""})}
+      ${stat("Frame rate", f1(b.frame_rate) + " fps", "board", {field: "frame_rate", extra: b.probe_only ? "The board counts the monitor's probe packets as frames; that's left out here." : ""})}
       ${stat("sACN", `${f1(b.sacn.recvd)} / ${f1(b.sacn.dropped)}`, "stream", {field: "streaming", extra: "sACN received / dropped in the board's current window"})}
       ${stat("Art-Net", `${f1(b.artnet.recvd)} / ${f1(b.artnet.dropped)}`, "stream", {field: "streaming", extra: "Art-Net received / dropped in the board's current window"})}
     </div>

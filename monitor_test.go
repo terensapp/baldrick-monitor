@@ -256,3 +256,20 @@ func TestFPPBusy(t *testing.T) {
 	status = fmt.Sprintf(`{"status_name":"idle","scheduler":{"nextPlaylist":{"playlistName":"Halloween","scheduledStartTime":%d}}}`, time.Now().Add(3*time.Hour).Unix())
 	check("")
 }
+
+func TestProbeOnlyStreamIsNotAShow(t *testing.T) {
+	b := testBoard(t)
+	b.self = "192.168.3.9"
+	b.mergeState([]byte(`{"uptime":100,"frame_rate":20,"streaming":{"ddp_sources":["192.168.3.9"],"ddp_recvd":60}}`), "ws")
+	v := b.View()
+	if !v.ProbeOnly || v.FrameRate != 0 {
+		t.Errorf("probe-only: ProbeOnly=%v FrameRate=%v", v.ProbeOnly, v.FrameRate)
+	}
+	if s := v.sample(); s.V["fps"] != 0 || s.V["ddp_recvd"] != 0 {
+		t.Errorf("history sample counted the probe: %v", s.V)
+	}
+	b.mergeState([]byte(`{"frame_rate":40,"streaming":{"ddp_sources":["192.168.6.100"],"ddp_recvd":600}}`), "ws")
+	if v := b.View(); v.ProbeOnly || v.FrameRate != 40 {
+		t.Errorf("real show: ProbeOnly=%v FrameRate=%v", v.ProbeOnly, v.FrameRate)
+	}
+}
