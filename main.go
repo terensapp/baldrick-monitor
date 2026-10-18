@@ -54,10 +54,22 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	reg, err := NewRegistry(ctx, cfg, pinger)
+	var regp atomic.Pointer[Registry] // the FPP pollers start before the boards
+	fpps, err := NewFPPRegistry(ctx, cfg, func() []*Board {
+		if r := regp.Load(); r != nil {
+			return r.List()
+		}
+		return nil
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
+	reg, err := NewRegistry(ctx, cfg, pinger, fpps)
+	if err != nil {
+		log.Fatal(err)
+	}
+	regp.Store(reg)
+	go fpps.Run(ctx)
 	upd := NewUpdater(cfg)
 	go upd.Run(ctx)
 	views := func() []BoardView {
@@ -95,6 +107,7 @@ func main() {
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		writeMetrics(w, views())
+		writeFPPMetrics(w, fpps.Views())
 		writeMonitorMetrics(w, upd.Info())
 	})
 	mux.HandleFunc("GET /api/meta", func(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +119,8 @@ func main() {
 			"resolution":              cfg.History.Resolution,
 			"persistent":              cfg.History.DataDir != "",
 			"boards_persistent":       reg.Persistent(),
+			"fpps_persistent":         fpps.Persistent(),
+			"show_lead_s":             showLeadTime.Seconds(),
 			"auth_required":           cfg.token() != "",
 			"probe":                   cfg.DDPProbe,
 			"thresholds":              cfg.th(),
@@ -139,6 +154,7 @@ func main() {
 		n.publishLive()
 		cur.Store(n)
 		upd.SetConfig(n)
+		fpps.SetConfig(n)
 		if restart {
 			reg.Reconfigure(n)
 		}
@@ -265,6 +281,76 @@ func main() {
 			w.WriteHeader(http.StatusAccepted)
 		}
 	}))
+	mux.HandleFunc("GET /api/fpps", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, fpps.Views()) })
+	mux.HandleFunc("POST /api/fpps", admin(func(w http.ResponseWriter, r *http.Request) {
+		var c FPPConfig
+		if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		c, err := fpps.Add(c)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(c)
+	}))
+	mux.HandleFunc("GET /api/fpps/inspect", admin(func(w http.ResponseWriter, r *http.Request) {
+		c := FPPConfig{Host: strings.TrimSpace(r.URL.Query().Get("host"))}
+		if err := normalizeFPP(&c); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		p, err := fpps.Inspect(ctx, c.Host)
+		if err != nil {
+			httpError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, p)
+	}))
+	mux.HandleFunc("PUT /api/fpps/{name}", admin(func(w http.ResponseWriter, r *http.Request) {
+		var u FPPUpdate
+		if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+			httpError(w, http.StatusBadRequest, err)
+			return
+		}
+		c, err := fpps.Update(r.PathValue("name"), u)
+		if errors.Is(err, errNoFPP) {
+			httpError(w, http.StatusNotFound, err)
+			return
+		} else if err != nil {
+			httpError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, c)
+	}))
+	mux.HandleFunc("DELETE /api/fpps/{name}", admin(func(w http.ResponseWriter, r *http.Request) {
+		ignored, err := fpps.Remove(r.PathValue("name"))
+		if errors.Is(err, errNoFPP) {
+			httpError(w, http.StatusNotFound, err)
+			return
+		} else if err != nil {
+			httpError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ignored": ignored})
+	}))
+	mux.HandleFunc("GET /api/fpps/{name}/history", func(w http.ResponseWriter, r *http.Request) {
+		d, err := time.ParseDuration(r.URL.Query().Get("range"))
+		if err != nil || d <= 0 {
+			d = 24 * time.Hour
+		}
+		samples, events, err := fpps.History(r.PathValue("name"), min(d, cur.Load().retention()), 720)
+		if err != nil {
+			httpError(w, http.StatusNotFound, err)
+			return
+		}
+		writeJSON(w, map[string]any{"samples": samples, "events": events})
+	})
 	incidentBoard := func(w http.ResponseWriter, r *http.Request) (*Board, string) {
 		id := r.PathValue("id")
 		for _, b := range reg.List() {

@@ -23,7 +23,7 @@ import (
 
 // Alert is something worth pushing to a person.
 type Alert struct {
-	Event    string    `json:"event"` // lockup, reboot, ddp, recovered, update, test, digest
+	Event    string    `json:"event"` // see AlertEvents, plus test and digest
 	Severity string    `json:"severity"`
 	Board    string    `json:"board"`
 	Host     string    `json:"host"`
@@ -36,7 +36,10 @@ type Alert struct {
 }
 
 // AlertEvents are the events a channel can subscribe to.
-var AlertEvents = []string{"lockup", "reboot", "ddp", "memory", "recovered", "update"}
+var AlertEvents = []string{"lockup", "reboot", "ddp", "show", "memory", "recovered", "fpp_unreachable", "show_started", "show_stopped", "update"}
+
+// optInEvents are left out of channels that don't pick their events.
+var optInEvents = []string{"update", "show_started", "show_stopped"}
 
 // Channel is one place alerts go.
 type Channel struct {
@@ -44,7 +47,7 @@ type Channel struct {
 	Name    string   `json:"name"`
 	Type    string   `json:"type"` // discord, slack, ntfy, webhook, email
 	Enabled bool     `json:"enabled"`
-	Events  []string `json:"events"` // empty = everything but update
+	Events  []string `json:"events"` // empty = everything but optInEvents
 
 	URL   string `json:"url,omitempty"`   // discord/slack/webhook URL, ntfy topic URL
 	Token string `json:"token,omitempty"` // ntfy access token (optional)
@@ -69,7 +72,7 @@ func (ch *Channel) wants(event string) bool {
 		return true
 	}
 	if len(ch.Events) == 0 {
-		return event != "update"
+		return !slices.Contains(optInEvents, event)
 	}
 	return slices.Contains(ch.Events, event)
 }
@@ -174,7 +177,9 @@ func (n *Notifier) Send(a Alert) {
 	if !n.Enabled() {
 		return
 	}
-	key := a.Board + "/" + a.Event
+	// Severity is part of the key so an "is back" (info) isn't swallowed by
+	// the "is down" (warn) it follows.
+	key := a.Board + "/" + a.Event + "/" + a.Severity
 	n.mu.Lock()
 	if t, ok := n.last[key]; ok && time.Since(t) < alertCooldown && a.Event != "test" {
 		n.mu.Unlock()

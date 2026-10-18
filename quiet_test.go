@@ -181,7 +181,7 @@ func TestMaintenanceSilencesAndAutoAcks(t *testing.T) {
 	cfg.Boards = []BoardConfig{{Name: "t", Host: "127.0.0.1:1"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	reg, err := NewRegistry(ctx, cfg, nil)
+	reg, err := NewRegistry(ctx, cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestMaintenanceExpires(t *testing.T) {
 	cfg.Boards = []BoardConfig{{Name: "t", Host: "127.0.0.1:1"}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	reg, err := NewRegistry(ctx, cfg, nil)
+	reg, err := NewRegistry(ctx, cfg, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

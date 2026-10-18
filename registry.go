@@ -20,6 +20,7 @@ var errNotFound = errors.New("no such board")
 type Registry struct {
 	cfg    *Config
 	pinger *Pinger
+	fpps   *FPPRegistry
 	parent context.Context
 	path   string // "" = changes are not persisted
 
@@ -34,8 +35,8 @@ type entry struct {
 	done   chan struct{}
 }
 
-func NewRegistry(ctx context.Context, cfg *Config, p *Pinger) (*Registry, error) {
-	r := &Registry{cfg: cfg, pinger: p, parent: ctx, m: map[string]*entry{}}
+func NewRegistry(ctx context.Context, cfg *Config, p *Pinger, fpps *FPPRegistry) (*Registry, error) {
+	r := &Registry{cfg: cfg, pinger: p, fpps: fpps, parent: ctx, m: map[string]*entry{}}
 	boards := cfg.Boards
 	if dir := cfg.History.DataDir; dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -91,6 +92,7 @@ func (r *Registry) Reconfigure(cfg *Config) {
 func (r *Registry) startLocked(bc BoardConfig) {
 	ctx, cancel := context.WithCancel(r.parent)
 	e := &entry{b: NewBoard(bc, r.cfg, r.pinger), cancel: cancel, done: make(chan struct{})}
+	e.b.fpps = r.fpps
 	r.m[bc.Name] = e
 	r.order = append(r.order, bc.Name)
 	r.scheduleExpiryLocked(e.b, e.b.maint)

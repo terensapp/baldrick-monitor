@@ -136,7 +136,7 @@ func writeMetrics(w io.Writer, views []BoardView) {
 				ongoing[inc.Type]++
 			}
 		}
-		for _, t := range []string{"reboot", "lockup", "ddp"} {
+		for _, t := range []string{"reboot", "lockup", "ddp", "show_output"} {
 			g("incidents_unacknowledged", "Incidents not yet acknowledged.", float64(open[t]), n, "type", t)
 			g("incidents_ongoing", "Incidents still in progress (e.g. a lockup).", float64(ongoing[t]), n, "type", t)
 		}
@@ -176,4 +176,30 @@ func addSummary(g func(string, string, float64, string, ...string), prefix, what
 	if s.Last != nil {
 		g(prefix+"_rtt_last_seconds", what+" most recent round-trip time.", *s.Last/1000, board)
 	}
+}
+
+func writeFPPMetrics(w io.Writer, fpps []FPPView) {
+	c := newCollector()
+	g := func(name, help string, v float64, labels ...string) {
+		c.add("baldrick_fpp_"+name, "gauge", help, v, labels...)
+	}
+	for _, f := range fpps {
+		if !f.Enabled || f.Ignored {
+			continue
+		}
+		g("up", "1 while the FPP answers its status API.", b2f(f.Up), "fpp", f.Name)
+		if !f.Up {
+			continue
+		}
+		g("info", "The FPP's version and role.", 1, "fpp", f.Name, "host", f.Host, "version", f.Version, "platform", f.Platform, "mode", f.Mode, "source", f.Source)
+		g("playing", "1 while the FPP is playing.", b2f(strings.EqualFold(f.Status, "playing")), "fpp", f.Name)
+		g("seconds_remaining", "Seconds left in the current playlist entry.", f.SecondsRemaining, "fpp", f.Name)
+		if f.NextStart != nil {
+			g("next_show_timestamp_seconds", "Unix time of the next scheduled show.", float64(f.NextStart.Unix()), "fpp", f.Name)
+		}
+		for _, d := range f.Drives {
+			g("board_receiving", "1 while a board this FPP outputs to lists it as a stream source.", b2f(d.Receiving), "fpp", f.Name, "board", d.Board)
+		}
+	}
+	c.write(w)
 }

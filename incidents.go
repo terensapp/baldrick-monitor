@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ import (
 //	reboot  the board restarted (Kind: unexpected, firmware_update, settings_change)
 //	lockup  HTTP stopped working (503s, timeouts, refused); may end in a reboot
 //	ddp     HTTP works but the board stopped processing DDP
+//	show_output  an FPP is playing a show aimed at the board, but the board
+//	        isn't receiving anything from it
 //	manual  diagnostics captured on request
 type Incident struct {
 	ID    string `json:"id"`
@@ -51,6 +54,7 @@ type Incident struct {
 	Before      Snapshot     `json:"before"`
 	After       *Snapshot    `json:"after,omitempty"`
 	Diagnostics []DiagResult `json:"diagnostics,omitempty"`
+	FPP         *ShowFPP     `json:"fpp,omitempty"` // show_output: the FPP that should be feeding the board
 	Ack         *Ack         `json:"ack"`
 
 	Timeline []RecPoint `json:"timeline,omitempty"`
@@ -217,6 +221,9 @@ func (b *Board) loadIncidents() {
 		}
 		if inc.Ongoing && inc.Type == "ddp" {
 			b.activeDDP = inc
+		}
+		if inc.Ongoing && inc.Type == "show_output" {
+			b.activeShow = inc
 		}
 	}
 }
@@ -658,6 +665,256 @@ func (b *Board) noteDDP(res DDPProbe) {
 	b.alert(inc, "ddp", "warn", inc.Cause)
 }
 
+// ======== show output ========
+
+// ShowFPP is the FPP side of a show_output incident: what it reported and
+// where its outputs point, as read when the incident opened.
+type ShowFPP struct {
+	Name    string          `json:"name"`
+	IP      string          `json:"ip"`
+	Status  json.RawMessage `json:"status,omitempty"`  // /api/fppd/status
+	Outputs json.RawMessage `json:"outputs,omitempty"` // /api/channel/output/universeOutputs
+	Targets []fppTarget     `json:"targets"`           // the outputs aimed at this board
+}
+
+// showGrace is how long a playing FPP's stream may be missing from the
+// board's source lists before it counts. The board lists a source for ~5s
+// after its last packet, so this rides out gaps between sequences.
+const showGrace = 20 * time.Second
+
+// showLoop checks during shows that each FPP playing to the board is
+// actually reaching it.
+func (b *Board) showLoop(ctx context.Context) {
+	if !sleepCtx(ctx, 10*time.Second) { // let state arrive first
+		return
+	}
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		b.mu.RLock()
+		fpps, fresh := b.st.FPP, b.haveState && time.Since(b.stateAt) < 15*time.Second
+		b.mu.RUnlock()
+		if failing, _ := b.struggling(); fresh && !failing {
+			feeds := b.fpps.feedsFor(b.cfg.Name, fpps)
+			b.mu.Lock()
+			b.noteShow(feeds, time.Now())
+			b.mu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// addrs is every address the board may be configured under in FPP.
+func (b *Board) addrs(ctx context.Context) []string {
+	h := hostOnly(b.cfg.Host)
+	a := append([]string{h}, resolveHosts(ctx, h)...)
+	b.mu.RLock()
+	if s := b.settings; s != nil && s.Hostname != "" {
+		a = append(a, s.Hostname)
+	}
+	b.mu.RUnlock()
+	return a
+}
+
+// fppRefs is what the FPP registry needs to know about this board.
+func (b *Board) fppRefs() fppBoardRefs {
+	addrs := b.addrs(context.Background())
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	s := b.st.Streaming
+	var src []string
+	for _, l := range [][]string{s.DDPSources, s.SACNSources, s.ArtNetSources} {
+		for _, ip := range l {
+			if !slices.Contains(src, ip) {
+				src = append(src, ip)
+			}
+		}
+	}
+	return fppBoardRefs{name: b.cfg.Name, addrs: addrs, self: b.self, reported: slices.Clone(b.st.FPP), sources: src}
+}
+
+// noteFPP records something an FPP related to this board did, as an event
+// and in the flight recorder, so incidents can be read against shows.
+func (b *Board) noteFPP(level, msg string, rec map[string]any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rec.add("fpp", rec)
+	b.addEvent(level, "%s", msg)
+}
+
+// receivingFromFPP reports whether the board lists addr as a source, and
+// the title of an ongoing show_output incident about it.
+func (b *Board) receivingFromFPP(addr string) (bool, string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	inc := ""
+	if a := b.activeShow; a != nil && a.FPP != nil && hostOnly(a.FPP.IP) == hostOnly(addr) {
+		inc = a.Title
+	}
+	return b.haveState && receivingFrom(&b.st, addr), inc
+}
+
+// receivingFrom reports whether the board lists ip as a source on any
+// protocol.
+func receivingFrom(st *SystemState, ip string) bool {
+	ip = hostOnly(ip)
+	s := st.Streaming
+	for _, l := range [][]string{s.DDPSources, s.SACNSources, s.ArtNetSources} {
+		if slices.Contains(l, ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// noteShow opens a show_output incident when a playing FPP's stream has
+// been missing from the board for showGrace, and resolves it when the
+// stream shows up or the FPP stops (b.mu held). An FPP that can't be read
+// changes nothing.
+func (b *Board) noteShow(feeds []fppFeed, now time.Time) {
+	if b.showMissing == nil {
+		b.showMissing = map[string]time.Time{}
+	}
+	if inc := b.activeShow; inc != nil && inc.FPP != nil {
+		for _, f := range feeds {
+			if f.FPP.IP != inc.FPP.IP || f.Err != nil {
+				continue
+			}
+			switch {
+			case !strings.EqualFold(f.Status.StatusName, "playing"):
+				b.endShow(inc, now, fmt.Sprintf("FPP %s stopped playing", f.Name), false)
+			case len(f.Targets) == 0:
+				b.endShow(inc, now, fmt.Sprintf("FPP %s no longer outputs to the board", f.Name), false)
+			case receivingFrom(&b.st, f.FPP.IP):
+				b.endShow(inc, now, fmt.Sprintf("The board is receiving from FPP %s", f.Name), true)
+			}
+		}
+	}
+	if b.pingFails > 0 || b.activeLockup != nil {
+		return // a lockup explains it, and is reported on its own
+	}
+	for _, f := range feeds {
+		if f.Err != nil {
+			continue
+		}
+		if !f.Playing() || receivingFrom(&b.st, f.FPP.IP) {
+			delete(b.showMissing, f.FPP.IP)
+			continue
+		}
+		since, ok := b.showMissing[f.FPP.IP]
+		if !ok {
+			b.showMissing[f.FPP.IP] = now
+			continue
+		}
+		if now.Sub(since) >= showGrace && b.activeShow == nil {
+			b.startShow(f, since, now)
+		}
+	}
+}
+
+func (b *Board) startShow(f fppFeed, since, now time.Time) {
+	what := f.What()
+	inc := &Incident{
+		ID: newIncidentID(now), Board: b.cfg.Name, Host: b.cfg.Host, Type: "show_output", Kind: "show_output",
+		Title:     fmt.Sprintf("FPP %s is playing %s but %s isn't receiving from it", f.Name, what, b.cfg.Name),
+		StartedAt: since, DetectedAt: now, Ongoing: true, LastSeenAt: b.stateAt,
+		FPP: &ShowFPP{Name: f.Name, IP: f.FPP.IP, Status: f.Status.raw, Outputs: f.Outputs.Raw, Targets: f.Targets},
+	}
+	if b.haveState {
+		inc.Before = snapshotOf(&b.st, b.stateAt)
+	}
+	var to []string
+	for _, t := range f.Targets {
+		to = append(to, fmt.Sprintf("%s to %s (channels %d–%d)", protoName(t.Protocol), t.Address, t.StartChannel, t.StartChannel+t.ChannelCount-1))
+	}
+	inc.Cause = fmt.Sprintf("FPP %s (%s) reports it is playing %s and its channel outputs send %s, but for %s the board hasn't listed %s as a source on any protocol.",
+		f.Name, f.FPP.IP, what, strings.Join(to, ", "), fmtDur(now.Sub(since).Seconds()), hostOnly(f.FPP.IP))
+	inc.Findings = b.showFindings(f)
+	b.maintenanceAck(inc, now)
+	b.activeShow = inc
+	b.incidents = append(b.incidents, inc)
+	tl := b.rec.since(now.Add(-b.glob.Incidents.RecorderWindow.Duration))
+	b.persist(inc, tl)
+	b.addEvent("error", "%s", inc.Title)
+	b.alert(inc, "show", "warn", inc.Cause)
+}
+
+func (b *Board) showFindings(f fppFeed) []string {
+	st, s := f.Status, b.st.Streaming
+	fs := []string{fmt.Sprintf("FPP status: %s, playlist %q, sequence %q.", st.StatusName, st.CurrentPlaylist.Playlist, st.CurrentSequence)}
+	if st.OutputsEnabled != nil && !*st.OutputsEnabled {
+		fs = append(fs, "FPP reports its channel outputs are disabled (channelOutputsEnabled false), so it isn't sending anything.")
+	}
+	for _, t := range f.Targets {
+		d := ""
+		if t.Description != "" {
+			d = fmt.Sprintf(" %q", t.Description)
+		}
+		fs = append(fs, fmt.Sprintf("FPP output%s: %s to %s, start channel %d, %d channels.", d, protoName(t.Protocol), t.Address, t.StartChannel, t.ChannelCount))
+	}
+	src := func(l []string) string {
+		if len(l) == 0 {
+			return "none"
+		}
+		return strings.Join(l, ", ")
+	}
+	fs = append(fs, fmt.Sprintf("Board sources: DDP %s (%.0f received), sACN %s, Art-Net %s; %.1f fps.",
+		src(s.DDPSources), s.DDPRecvd, src(s.SACNSources), src(s.ArtNetSources), b.st.FrameRate))
+	var others []string
+	for _, l := range [][]string{s.DDPSources, s.SACNSources, s.ArtNetSources} {
+		for _, ip := range l {
+			if ip != b.self && !slices.Contains(others, ip) {
+				others = append(others, ip)
+			}
+		}
+	}
+	if len(others) > 0 {
+		fs = append(fs, fmt.Sprintf("The board is receiving from %s instead: another controller may own it, or FPP is sending from a different address.", strings.Join(others, ", ")))
+	} else {
+		fs = append(fs, "The board isn't receiving from anything: check FPP's output interface, the network path, and that FPP isn't in a remote/bridge mode that suppresses output.")
+	}
+	return fs
+}
+
+func protoName(p string) string {
+	switch p {
+	case "ddp":
+		return "DDP"
+	case "e131":
+		return "E1.31"
+	case "artnet":
+		return "Art-Net"
+	case "kinet":
+		return "KiNET"
+	}
+	return p
+}
+
+// endShow resolves a show_output incident (b.mu held).
+func (b *Board) endShow(inc *Incident, now time.Time, why string, arrived bool) {
+	b.activeShow = nil
+	delete(b.showMissing, inc.FPP.IP)
+	inc.Ongoing, inc.ResolvedAt = false, &now
+	inc.DurationS = now.Sub(inc.StartedAt).Seconds()
+	inc.Resolution = why
+	inc.Title = fmt.Sprintf("Show from FPP %s not reaching %s for %s", inc.FPP.Name, b.cfg.Name, fmtDur(inc.DurationS))
+	if b.haveState {
+		after := snapshotOf(&b.st, b.stateAt)
+		inc.After = &after
+	}
+	b.persist(inc, nil)
+	b.addEvent("info", "%s after %s", why, fmtDur(inc.DurationS))
+	msg := why + " after " + fmtDur(inc.DurationS) + "."
+	if !arrived {
+		msg += " The board never received its stream."
+	}
+	b.alert(inc, "recovered", "info", msg)
+}
+
 // ======== manual capture ========
 
 // Capture freezes the recorder and runs a diagnostic sweep on request.
@@ -785,6 +1042,7 @@ func (b *Board) leadUp(inc *Incident, tl []RecPoint, until time.Time) (f []strin
 	if !bs.At.IsZero() {
 		from = bs.At.Add(-secs(bs.Uptime) - time.Second)
 	}
+	defer func() { f = append(f, b.fpps.showContext(b.cfg.Name, b.st.FPP, until)...) }()
 	l := scanLeadUp(tl, from, until)
 	if math.IsNaN(l.ramLast) {
 		l.ramLast = bs.RAMAvailable

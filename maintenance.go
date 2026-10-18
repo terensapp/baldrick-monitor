@@ -71,15 +71,18 @@ func (b *Board) setMaintenance(m *Maintenance) {
 	case was:
 		b.addEvent("info", "Maintenance mode off; alerts resume")
 		// Anything still wrong now is news to whoever is on call.
-		for _, inc := range []*Incident{b.activeLockup, b.activeDDP} {
+		for _, inc := range []*Incident{b.activeLockup, b.activeDDP, b.activeShow} {
 			if inc == nil || inc.Ack == nil || !inc.Ack.Auto || inc.Ack.Note != maintenanceAckNote {
 				continue
 			}
 			inc.Ack = nil
 			b.persist(inc, nil)
-			if inc.Type == "lockup" {
+			switch inc.Type {
+			case "lockup":
 				b.alert(inc, "lockup", "error", "Still not responding after maintenance ended. "+inc.Cause)
-			} else {
+			case "show_output":
+				b.alert(inc, "show", "warn", "Still not receiving the show after maintenance ended. "+inc.Cause)
+			default:
 				b.alert(inc, "ddp", "warn", "Still not processing DDP after maintenance ended. "+inc.Cause)
 			}
 		}

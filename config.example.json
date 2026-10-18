@@ -13,7 +13,8 @@
     "system_state": "15s",
     "web_ui": "1m",
     "settings": "5m",
-    "ddp_probe": "1m"
+    "ddp_probe": "1m",
+    "fpp": "15s"
   },
   "ddp_probe": {
     "mode": "auto",

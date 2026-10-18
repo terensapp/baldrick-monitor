@@ -49,10 +49,12 @@ Set `ddp_probe` on a single board to override the mode for that board.
 **Probes and live shows.** In `auto` mode, probes are built to stay out of
 a show's way:
 
-- **FPP-aware:** before each probe, the monitor asks every FPP the board
-  reports (`/api/fppd/status`) whether it's playing or has a show
-  scheduled within 5 minutes, and waits if so. This covers the gaps
-  between sequences in a playlist. Turn it off with
+- **FPP-aware:** probes wait while any FPP that drives the board (its
+  outputs point at it) or that the board reports as a peer is running
+  something, or is within 5 minutes of its next scheduled show (see
+  [FPP](#fpp)). This covers the gaps between sequences in a playlist. An
+  FPP the board reports that hasn't been checked yet holds probes too; an
+  unreachable, disabled or ignored one doesn't. Turn it off with
   `ddp_probe.ignore_fpp` (Settings → Monitoring → During shows).
 - **Gets out of the way:** if another DDP source appears mid-probe, the
   probe stops sending immediately.
@@ -89,7 +91,65 @@ Events are logged when any of these happen:
 - a WebSocket drop;
 - a DDP check failure or recovery.
 
-## Incidents: reboots, lockups and DDP failures
+**Show output verification.** Probes pause during shows, so instead the
+monitor checks that the show actually reaches the board. Every 5 seconds it
+looks at what the [FPP pollers](#fpp) last saw: if an FPP is playing and its
+channel outputs send DDP, unicast E1.31, unicast Art-Net or KiNET to the
+board's address (or its hostname), the board must list that FPP's IP among
+its stream sources. If it doesn't for 20 seconds, a **show output** incident
+opens; it resolves when the stream appears, or when FPP stops playing or no
+longer outputs to the board. Multicast E1.31 and Art-Net broadcast outputs
+can't be tied to one board and aren't checked. An FPP that can't be reached
+is left alone (it gets its own alert).
+
+## FPP
+
+The monitor watches every FPP that feeds the boards, to cross-reference
+board trouble with shows and to know when to stay out of a show's way.
+
+**Finding them.** FPPs are added automatically from:
+
+- every board's `system_state.fpp` peer list;
+- any DDP, sACN or Art-Net source a board lists that answers FPP's
+  `/api/fppd/status` (asked once, then left alone for 30 minutes if it
+  isn't FPP). The monitor's own probe address is skipped.
+
+You can also add one by hand (**⚙ Settings → FPP → Add FPP**, with **Test
+connection**), disable one, or remove one. Removing an auto-discovered FPP
+keeps it as **ignored** so discovery doesn't bring it back; **Restore**
+undoes that. The list lives in `<data_dir>/fpps.json`.
+
+**Polling.** One poller per FPP, using GET requests only:
+
+| What | Endpoint | How often |
+|---|---|---|
+| Status, mode, playlist, sequence, time remaining, next scheduled show, version, platform | `/api/fppd/status` | `intervals.fpp` (default 15s, Settings → Monitoring) |
+| Network outputs, mapped to monitored boards | `/api/channel/output/universeOutputs` | every 5 minutes, and when a show starts |
+
+Three failed polls in a row make an FPP **unreachable**.
+
+**Dashboard.** An FPP panel above the boards shows each FPP's status, what
+it's playing and how long is left, its next show, and the boards it drives
+with whether each is receiving its stream right now. While any FPP is
+playing, the header shows **Show running: <playlist> on <fpp>**; within 5
+minutes of a scheduled show it shows **Next show at HH:MM**, so it's clear
+why DDP probes are standing aside.
+
+**Cross-referencing.** Show started/stopped and FPP unreachable/back are
+recorded as events on the FPP and on every board it drives or that reports
+it, and in those boards' flight recorders (`fpp` points). Incident findings
+place each incident relative to the shows, e.g. *"Began 2h15m after FPP fpp
+stopped Halloween"* or *"Happened during FPP fpp's show Halloween (started
+18:00, 1h12m in)"*. Each board's history rollups carry a `show` flag, and
+the history charts shade show periods. Each FPP also keeps its own
+rollups, events and show log under `<data_dir>/_fpp/<name>/`.
+
+API: `GET /api/fpps`, `POST /api/fpps` (`{"name","host"}`),
+`PUT /api/fpps/{name}` (`{"enabled":bool}` or `{"ignored":bool}`),
+`DELETE /api/fpps/{name}` (removes a manual entry, ignores an auto one),
+`GET /api/fpps/{name}/history?range=24h`, `GET /api/fpps/inspect?host=`.
+
+## Incidents: reboots, lockups, DDP failures and missing shows
 
 When something goes wrong, the monitor opens an **incident** and keeps the
 telemetry that led up to it. It keeps a rolling raw recorder (default 30
@@ -101,6 +161,7 @@ update, DDP check and event.
 | **Stopped responding** (lockup) | `/ping` fails `http_fail_down` times in a row (503s, timeouts, refused) | An immediate diagnostic sweep (TCP connect; every endpoint's status and error page; 5 pings) to separate "web server up but the firmware refuses (503)", "network stack alive but HTTP hung" and "nothing answers (power/network)". It stays open until HTTP works again and records whether it recovered on its own or only after a reboot. |
 | **Reboot** | The board's boot time (now − uptime) jumps forward, including reboots that happened while the monitor was down | Classified as *unexpected*, *firmware update* or *after a settings change* (the last two are auto-acknowledged). Findings cover how the board went quiet (instant crash vs hang vs long outage), memory and leak trends, temperature, active streams, crash loops, and any message the board shows after booting. |
 | **Not processing DDP** | Two DDP checks in a row fail while HTTP still works | The probe results and the board's stream counters. |
+| **Show output** | An FPP whose outputs include the board is playing, but the board hasn't listed that FPP as a stream source for 20s (not raised during a lockup) | FPP's full status and output config, the outputs aimed at the board, and the board's sources at the time, including any other controller it's receiving from instead. |
 | **Manual capture** | **Collect diagnostics now** in a board's ••• menu | The recorder plus a fresh sweep. Use it the moment something looks off. |
 
 An incident keeps the board **degraded** until you **Acknowledge** it, with
@@ -133,15 +194,19 @@ Set these up in **⚙ Settings → Notifications**. Add any number of channels:
 | **Webhook** | Any URL. The alert is POSTed as JSON. |
 
 Each channel picks its events: **stopped responding**, **unexpected
-reboot**, **DDP failure**, **low memory** (the board's lowest free memory
-since boot fell below `ram_min_warn_bytes`), **recovered**, and optionally
-**monitor update available**. **Send test** checks a channel before you save. Repeats of the
+reboot**, **DDP failure**, **show not reaching board**, **low memory** (the board's lowest free memory
+since boot fell below `ram_min_warn_bytes`),
+**recovered**, **FPP unreachable / back**, and optionally **show started**,
+**show stopped** and **monitor update available**. **Send test** checks a channel before you save. Repeats of the
 same event for the same board are held back for 2 minutes, so a flapping
 board doesn't flood you. Set the **dashboard URL** so alerts link straight
 to the incident.
 
 Prometheus also gets `baldrick_incidents_unacknowledged{type}` and
-`baldrick_incidents_ongoing{type}`.
+`baldrick_incidents_ongoing{type}`, plus per FPP `baldrick_fpp_up`,
+`baldrick_fpp_playing`, `baldrick_fpp_info{version,platform,mode,...}`,
+`baldrick_fpp_seconds_remaining`, `baldrick_fpp_next_show_timestamp_seconds`
+and `baldrick_fpp_board_receiving{board}`.
 
 ### Maintenance mode
 
@@ -196,7 +261,9 @@ file:
 
 - **Notifications:** channels, events, quiet hours, the dashboard URL.
 - **Monitoring:** every polling interval, the default DDP check mode, the
-  probe offset and burst.
+  probe offset and burst, and the FPP status interval.
+- **FPP:** the FPPs being watched (auto-discovered and added by hand):
+  add, disable, ignore or restore them. Changes here apply at once.
 - **Alert rules:** down-after-N-failures, loss and latency warnings,
   temperature (in °F or °C) and low-memory thresholds, the display unit.
 - **Data:** history and incident retention, rollup resolution, the
@@ -264,8 +331,16 @@ curl -XPOST 'localhost:8081/_sim/hang?secs=60'  # 503 lockup (add &reboot=1 to e
 curl -XPOST localhost:8081/_sim/crash           # sudden crash + reboot
 curl -XPOST localhost:8081/_sim/leak            # heap drains until it crashes
 curl -XPOST localhost:8081/_sim/ddpstall        # stops counting DDP
+curl -XPOST 'localhost:8081/_sim/fpp?state=playing&stream=0'  # its FPP plays, stream never arrives
+curl -XPOST 'localhost:8081/_sim/fpp?stream=1'  # ...now it does
+curl -XPOST 'localhost:8081/_sim/fpp?start_in=120'  # schedules a show in 2 minutes
+curl -XPOST 'localhost:8081/_sim/fpp?down=1'    # its FPP stops answering (down=0 to recover)
 curl -XPOST localhost:8081/_sim/reset
 ```
+
+The fake board reports itself as its FPP peer (`fakefpp`), serves FPP's
+status and output endpoints, and rejects anything but GET there, so the
+monitor discovers it and every FPP feature can be exercised.
 
 A board address can include a port (`host:port`). The port applies to HTTP
 and the WebSocket; ICMP and DDP always go to the host.
@@ -284,6 +359,7 @@ The dashboard is at `http://host:8420/`. Other endpoints:
 - `GET /api/boards/{name}/history?range=24h`
 - `POST /api/boards/{name}/probe`: run a DDP check now
 - `PUT`/`DELETE /api/boards/{name}/maintenance`: start or end maintenance mode
+- `GET /api/fpps`: every FPP and what it's doing
 - `GET /api/meta`: intervals, retention, and how each value is collected
 - `GET /healthz`
 

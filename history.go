@@ -155,5 +155,5 @@ func downsample(in []Sample, n int) []Sample {
 }
 
 func worstKey(k string) bool {
-	return strings.Contains(k, "p95") || strings.Contains(k, "loss") || strings.Contains(k, "dropped") || k == "ws_down"
+	return strings.Contains(k, "p95") || strings.Contains(k, "loss") || strings.Contains(k, "dropped") || k == "ws_down" || k == "show"
 }
