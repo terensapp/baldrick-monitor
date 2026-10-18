@@ -72,6 +72,7 @@ type Intervals struct {
 	WebUI       Duration `json:"web_ui"`       // GET / (web UI served)
 	Settings    Duration `json:"settings"`     // GET /settings (hostname, ports)
 	DDPProbe    Duration `json:"ddp_probe"`    // DDP check
+	FPP         Duration `json:"fpp"`          // GET /api/fppd/status on each FPP
 }
 
 type ProbeConfig struct {
@@ -218,6 +219,7 @@ func (c *Config) applyDefaults() {
 	def(&iv.WebUI, time.Minute)
 	def(&iv.Settings, 5*time.Minute)
 	def(&iv.DDPProbe, time.Minute)
+	def(&iv.FPP, 15*time.Second)
 	if c.DDPProbe.Mode == "" {
 		c.DDPProbe.Mode = "auto"
 	}
@@ -360,6 +362,7 @@ func (c *Config) validateRanges() error {
 		{"web UI check interval", iv.WebUI.Duration, 5 * time.Second, 24 * time.Hour},
 		{"settings check interval", iv.Settings.Duration, 10 * time.Second, 24 * time.Hour},
 		{"DDP check interval", iv.DDPProbe.Duration, 10 * time.Second, 24 * time.Hour},
+		{"FPP status interval", iv.FPP.Duration, 5 * time.Second, time.Hour},
 		{"history resolution", c.History.Resolution.Duration, 10 * time.Second, time.Hour},
 		{"incident recorder window", c.Incidents.RecorderWindow.Duration, time.Minute, 6 * time.Hour},
 		{"update check interval", c.Updates.CheckInterval.Duration, 5 * time.Minute, 30 * 24 * time.Hour},
@@ -417,6 +420,8 @@ func (c *Config) sources() map[string]Source {
 		"ws":           {"streamed", "WebSocket /ws connection health (keepalive sent every 1s, stale after 6s)", ""},
 		"board":        {"streamed", ws, ""},
 		"stream":       {"streamed", ws + ". The board counts packets in ~5s windows; the counters reset when a stream stops", ""},
+		"fpp":          {"polled", "HTTP GET /api/fppd/status on the FPP (status, playlist, schedule, version); GET /api/channel/output/universeOutputs every " + Duration{fppOutputsTTL}.String() + " and when a show starts. Nothing but GETs is ever sent to FPP", iv.FPP.String()},
+		"fpp_drive":    {"derived", "FPP's outputs aimed at this board, cross-checked against the board's own stream sources (WebSocket /ws)", iv.FPP.String()},
 		"history":      {"derived", "Rolled up from the live values every " + c.History.Resolution.String(), c.History.Resolution.String()},
 	}
 }

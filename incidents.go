@@ -676,8 +676,8 @@ func (b *Board) showLoop(ctx context.Context) {
 		b.mu.RLock()
 		fpps, fresh := b.st.FPP, b.haveState && time.Since(b.stateAt) < 15*time.Second
 		b.mu.RUnlock()
-		if failing, _ := b.struggling(); fresh && !failing && len(fpps) > 0 {
-			feeds := fppFeeds(ctx, fpps, b.addrs(ctx))
+		if failing, _ := b.struggling(); fresh && !failing {
+			feeds := b.fpps.feedsFor(b.cfg.Name, fpps)
 			b.mu.Lock()
 			b.noteShow(feeds, time.Now())
 			b.mu.Unlock()
@@ -700,6 +700,44 @@ func (b *Board) addrs(ctx context.Context) []string {
 	}
 	b.mu.RUnlock()
 	return a
+}
+
+// fppRefs is what the FPP registry needs to know about this board.
+func (b *Board) fppRefs() fppBoardRefs {
+	addrs := b.addrs(context.Background())
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	s := b.st.Streaming
+	var src []string
+	for _, l := range [][]string{s.DDPSources, s.SACNSources, s.ArtNetSources} {
+		for _, ip := range l {
+			if !slices.Contains(src, ip) {
+				src = append(src, ip)
+			}
+		}
+	}
+	return fppBoardRefs{name: b.cfg.Name, addrs: addrs, self: b.self, reported: slices.Clone(b.st.FPP), sources: src}
+}
+
+// noteFPP records something an FPP related to this board did, as an event
+// and in the flight recorder, so incidents can be read against shows.
+func (b *Board) noteFPP(level, msg string, rec map[string]any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rec.add("fpp", rec)
+	b.addEvent(level, "%s", msg)
+}
+
+// receivingFromFPP reports whether the board lists addr as a source, and
+// the title of an ongoing show_output incident about it.
+func (b *Board) receivingFromFPP(addr string) (bool, string) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	inc := ""
+	if a := b.activeShow; a != nil && a.FPP != nil && hostOnly(a.FPP.IP) == hostOnly(addr) {
+		inc = a.Title
+	}
+	return b.haveState && receivingFrom(&b.st, addr), inc
 }
 
 // receivingFrom reports whether the board lists ip as a source on any
@@ -985,6 +1023,7 @@ func (b *Board) leadUp(inc *Incident, tl []RecPoint, until time.Time) (f []strin
 	if !bs.At.IsZero() {
 		from = bs.At.Add(-secs(bs.Uptime) - time.Second)
 	}
+	defer func() { f = append(f, b.fpps.showContext(b.cfg.Name, b.st.FPP, until)...) }()
 	l := scanLeadUp(tl, from, until)
 	if math.IsNaN(l.ramLast) {
 		l.ramLast = bs.RAMAvailable

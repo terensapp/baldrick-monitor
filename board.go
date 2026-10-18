@@ -176,6 +176,7 @@ type Board struct {
 	ddpFails     int
 	activeShow   *Incident
 	showMissing  map[string]time.Time // FPP IP → when its stream was first missing during a show
+	fpps         *FPPRegistry         // nil when FPPs aren't watched (tests)
 }
 
 func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
@@ -758,7 +759,7 @@ func (b *Board) runProbe(ctx context.Context, mode string) {
 	// Don't inject while a show is playing or about to start, even in the
 	// gap between sequences.
 	if mode != "always" && !pc.IgnoreFPP {
-		if busy := fppBusy(ctx, st.FPP); busy != "" {
+		if busy := b.fpps.busyFor(b.cfg.Name, st.FPP); busy != "" {
 			res.Skipped, res.Note = true, busy
 			b.finishProbe(res)
 			return
@@ -951,6 +952,7 @@ type BoardView struct {
 	Probe             *DDPProbe         `json:"probe"`
 	ProbePaused       *DDPProbe         `json:"probe_paused,omitempty"`
 	ProbeCounts       map[string]uint64 `json:"probe_counts"`
+	ShowRunning       bool              `json:"show_running"` // an FPP driving or reported by this board is running a show
 
 	Events []Event `json:"events"`
 
@@ -1051,6 +1053,7 @@ func (b *Board) View() BoardView {
 	if v.Events == nil {
 		v.Events = []Event{}
 	}
+	v.ShowRunning = b.fpps.showingFor(b.cfg.Name, st.FPP)
 	v.Status, v.Reasons = b.health(&v)
 	return v
 }
@@ -1245,6 +1248,7 @@ func (v BoardView) sample() Sample {
 			put("ddp_dropped", v.DDP.Dropped, true)
 		}
 	}
+	put("show", b2f(v.ShowRunning), true)
 	ws := 0.0
 	if !v.WSConnected {
 		ws = 1

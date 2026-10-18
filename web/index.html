@@ -212,6 +212,27 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
 .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* FPP */
+.showbar { display: none; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 99px; font-size: 12px; font-weight: 650; cursor: help; outline: none;
+  color: var(--s2); background: color-mix(in srgb, var(--s2) 13%, transparent); border: 1px solid color-mix(in srgb, var(--s2) 35%, transparent); }
+.showbar.on { display: inline-flex; }
+.showbar.soon { color: var(--degraded); background: color-mix(in srgb, var(--degraded) 12%, transparent); border-color: color-mix(in srgb, var(--degraded) 35%, transparent); }
+.fpps { margin: 12px 20px 0; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 12px 18px 6px; }
+.fpps:empty { display: none; }
+.fpps > .h { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.fpps > .h .hint { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); outline: none; }
+.fpprow { display: grid; grid-template-columns: minmax(180px, 1.1fr) minmax(200px, 1.4fr) minmax(180px, 1.5fr); gap: 8px 16px; padding: 9px 0; border-top: 1px solid var(--line); align-items: center; }
+.fpprow:first-of-type { border-top: 0; }
+.fpprow.off { opacity: .55; }
+.fpprow .nm { font-weight: 650; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fpprow .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.fpprow .now { font-size: 13px; cursor: help; outline: none; min-width: 0; }
+.fpprow .now small { display: block; color: var(--muted); font-size: 12px; }
+.fpprow .chips { margin: 0; }
+.pill.playing { --st: var(--s2); } .pill.idle { --st: var(--up); } .pill.unreachable { --st: var(--down); } .pill.paused { --st: var(--degraded); }
+.fpplist .fpprow { grid-template-columns: minmax(160px, 1fr) minmax(140px, 1fr) auto; }
+@media (max-width: 800px) { .fpprow, .fpplist .fpprow { grid-template-columns: 1fr; } .fpps { margin: 12px 16px 0; } }
+
 @media (max-width: 700px) {
   .charts, .sparks { grid-template-columns: 1fr; }
   .top-inner, .sub, main { padding-left: 16px; padding-right: 16px; }
@@ -228,6 +249,7 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
       <circle cx="3" cy="13" r="1.7" fill="var(--s1)"/><circle cx="8" cy="13" r="1.7" fill="var(--down)"/><circle cx="13" cy="13" r="1.7" fill="var(--up)"/></svg>
     <h1>Baldrick Monitor<small>Pixel controller health</small></h1>
   </div>
+  <span class="showbar" id="showbar" tabindex="0"></span>
   <div class="fleet" id="fleet"></div>
   <div class="actions">
     <button class="btn" type="button" data-act="settings" title="Settings" aria-label="Settings">⚙</button>
@@ -240,6 +262,7 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
   <span><b>↻</b> polled · <b>≋</b> streamed by the board · <b>Σ</b> derived · hover any value for how and when it was collected</span>
   <span style="display:inline-flex;gap:10px;align-items:center"><span id="ver"></span><span id="meta"></span></span>
 </div>
+<section class="fpps" id="fpps"></section>
 <main id="boards"></main>
 
 <dialog id="dlgBoard"><form method="dialog" id="fBoard">
@@ -325,6 +348,18 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
     <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
     <button class="btn primary" type="button" id="setSave">Save settings</button>
   </div>
+</form></dialog>
+
+<dialog id="dlgFPP"><form method="dialog" id="fFPP">
+  <h3>Add FPP</h3>
+  <p class="lead">FPPs the boards report, or that stream to them, are added automatically. Add one by hand if it isn't. The monitor only ever sends FPP GET requests.</p>
+  <div class="row">
+    <div class="field"><label for="ffHost">Host</label><input id="ffHost" required placeholder="192.168.6.100" autocomplete="off" spellcheck="false"></div>
+    <button class="btn" type="button" id="ffTest">Test connection</button>
+  </div>
+  <div class="found" id="ffFound"></div>
+  <div class="field"><label for="ffName">Name</label><input id="ffName" autocomplete="off" spellcheck="false" placeholder="defaults to FPP's host name"></div>
+  <div class="foot"><button class="btn ghost" value="cancel" formnovalidate>Cancel</button><button class="btn primary" value="save">Add FPP</button></div>
 </form></dialog>
 
 <div id="tip" role="tooltip"></div>
@@ -447,6 +482,7 @@ function spark(vals, color, o = {}) {
 }
 function chart(samples, series, fmt, t0, t1, id) {
   return withChart(chartSVG(samples, series, fmt, t0, t1), id, {kind: "time", t0, t1, tol: parseDur(META?.resolution) * 1.5,
+    shows: samples.filter(x => x.v?.show > 0).map(x => +new Date(x.t)),
     series: series.map(se => ({label: se.label, color: se.color, fmt, pts: samples.map(x => ({t: +new Date(x.t), v: x.v?.[se.key] == null ? null : x.v[se.key] * (se.scale || 1)}))}))});
 }
 function strip(samples, t0, t1, id) {
@@ -495,6 +531,7 @@ function showChartTip(svg, cx) {
       }
       if (best == null) return false;
       at = best;
+      if (m.shows?.some(t => Math.abs(t - at) <= m.tol)) lines.push(`<span style="color:var(--s2)">▮</span> FPP show running`);
       for (const mk of m.markers || []) if (Math.abs(mk.t - at) <= m.tol * 2) lines.push(`<span style="color:var(--${mk.color})">┆</span> ${mk.label} ${new Date(mk.t).toLocaleTimeString()}`);
     }
     x = r.left + (at - m.t0) / Math.max(m.t1 - m.t0, 1) * r.width;
@@ -555,8 +592,11 @@ function chartSVG(samples, series, fmt, t0, t1) {
     }
     return `<path d="${d}" fill="none" stroke="var(--${se.color})" stroke-width="1.6" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`;
   }).join("");
+  // Shade the stretches when an FPP driving this board was running a show.
+  const step = Math.max(parseDur(META?.resolution) / span * W, 0.6);
+  const shows = samples.filter(s => s.v?.show > 0).map(s => `<rect x="${x(s.t)}" width="${step.toFixed(2)}" y="0" height="${H}" fill="var(--s2)" opacity=".09"/>`).join("");
   const grid = [0.25, 0.5, 0.75].map(f => `<line x1="0" x2="${W}" y1="${(H * f).toFixed(0)}" y2="${(H * f).toFixed(0)}" stroke="var(--line)" stroke-dasharray="2 3" vector-effect="non-scaling-stroke"/>`).join("");
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${grid}<line x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}" stroke="var(--line)" vector-effect="non-scaling-stroke"/>${paths}</svg>
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${shows}${grid}<line x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}" stroke="var(--line)" vector-effect="non-scaling-stroke"/>${paths}</svg>
     <div class="t"><span>${series.map(s => `<span style="color:var(--${s.color})">●</span> ${s.label}`).join("&nbsp; ")}</span><span class="num">peak ${fmt(max)}</span></div>`;
 }
 function stripSVG(samples, t0, t1) {
@@ -690,7 +730,7 @@ function historyBlock(name) {
       const notDown = s.filter(x => x.status !== "down").length, up = s.filter(x => x.status === "up").length;
       const ts = s.map(x => x.v?.temp == null ? x : {...x, v: {...x.v, temp: toUnit(x.v.temp)}});
       body = `
-        <div class="note" style="margin-top:0">Reachable <b class="num">${pct(notDown / s.length)}</b> · fully healthy <b class="num">${pct(up / s.length)}</b> · ${s.length} samples</div>
+        <div class="note" style="margin-top:0">Reachable <b class="num">${pct(notDown / s.length)}</b> · fully healthy <b class="num">${pct(up / s.length)}</b> · ${s.length} samples${s.some(x => x.v?.show > 0) ? ` · <span style="color:var(--s2)">▮</span> shaded: FPP show running` : ""}</div>
         ${strip(s, t0, t1, name + ":strip")}
         <div class="charts">
           <div class="chart">${chart(s, [{key: "icmp_p95", label: "ICMP p95", color: "s1"}, {key: "http_p95", label: "HTTP p95", color: "s2"}], v => f2(v) + " ms", t0, t1, name + ":lat")}</div>
@@ -723,8 +763,13 @@ function renderFleet(boards) {
 
 async function refresh() {
   let boards;
-  try { boards = await (await fetch("api/boards")).json(); }
+  try {
+    const [rb, rf] = await Promise.all([fetch("api/boards"), fetch("api/fpps").catch(() => null)]);
+    boards = await rb.json();
+    if (rf?.ok) FPPS = await rf.json();
+  }
   catch { $("#meta").textContent = "Monitor unreachable"; return; }
+  renderFPPs();
   const root = $("#boards");
   renderFleet(boards);
   const names = new Set(boards.map(b => b.name));
@@ -756,6 +801,158 @@ async function refresh() {
   $("#meta").textContent = `Updated ${new Date().toLocaleTimeString()}`;
   refreshTip();
   refreshChartTip();
+}
+
+// ---------- FPP ----------
+let FPPS = [];
+const fppActive = f => f.up && f.status && f.status.toLowerCase() !== "idle";
+function fppState(f) {
+  if (!f.enabled) return ["disabled", "unknown"];
+  if (!f.checked) return ["checking", "unknown"];
+  if (!f.up) return ["unreachable", "unreachable"];
+  const s = (f.status || "").toLowerCase();
+  return [s, s === "playing" ? "playing" : s === "idle" ? "idle" : "paused"];
+}
+const clock = t => new Date(t).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+function dayClock(t) {
+  const d = new Date(t), today = new Date();
+  return d.toDateString() === today.toDateString() ? clock(t) : d.toLocaleDateString([], {weekday: "short"}) + " " + clock(t);
+}
+const tgtText = t => `${{ddp: "DDP", e131: "E1.31", artnet: "Art-Net", kinet: "KiNET"}[t.protocol] || t.protocol} to ${t.address}, channels ${t.start_channel}–${t.start_channel + t.channel_count - 1}${t.description ? ` (${t.description})` : ""}`;
+function pollExtra(f) {
+  const last = f.last_poll ? `Last poll ${ago(f.last_poll)}: ${f.up ? "OK" : "failed"}` : "Not polled yet";
+  return `${last}${f.error ? " · " + f.error : ""}${f.outputs_at ? ` · outputs read ${ago(f.outputs_at)}` : ""}`;
+}
+
+function renderShowbar() {
+  const el = $("#showbar"), lead = (META?.show_lead_s ?? 300) * 1000;
+  const live = FPPS.filter(f => f.enabled && fppActive(f));
+  const soon = FPPS.filter(f => f.enabled && f.up && f.next_start && new Date(f.next_start) - Date.now() > 0 && new Date(f.next_start) - Date.now() < lead);
+  el.className = "showbar";
+  if (live.length) {
+    const f = live[0], st = f.status.toLowerCase();
+    el.classList.add("on");
+    el.innerHTML = `${st === "playing" ? "▶" : "⏸"} Show ${st === "playing" ? "running" : esc(st)}: ${esc(f.playlist || f.sequence || "?")} on ${esc(f.name)}${live.length > 1 ? ` +${live.length - 1}` : ""}`;
+    el.dataset.extra = `${live.map(f => `${f.name}: ${f.status} ${f.playlist || f.sequence}${f.seconds_remaining ? ` (${dur(f.seconds_remaining)} left in this item)` : ""}`).join(" · ")}. DDP probes stand aside on the boards these FPPs drive until the show ends.`;
+    el.dataset.src = "fpp";
+  } else if (soon.length) {
+    const f = soon[0];
+    el.classList.add("on", "soon");
+    el.innerHTML = `◷ Next show at ${clock(f.next_start)}: ${esc(f.next_playlist)} on ${esc(f.name)}`;
+    el.dataset.extra = `Within ${dur(lead / 1000)} of a scheduled show, DDP probes on the boards it drives pause until it's idle again.`;
+    el.dataset.src = "fpp";
+  }
+}
+
+function fppRow(f) {
+  const [label, cls] = fppState(f);
+  const meta = [f.host, f.version && "FPP " + f.version, f.hardware, f.mode, f.source === "auto" ? "auto-discovered" : "added by hand"].filter(Boolean).map(esc).join(" · ");
+  let now;
+  if (!f.enabled) now = `<span class="now">Not monitored</span>`;
+  else if (!f.up) now = `<span class="now" ${srcAttrs("fpp", {extra: pollExtra(f)})}>${f.checked ? `<span class="bad">Unreachable</span><small>${esc(f.error || "")}</small>` : `<span class="spin"></span> checking…`}</span>`;
+  else {
+    const next = f.next_start ? `Next: ${esc(f.next_playlist)} ${dayClock(f.next_start)}` : "Nothing scheduled";
+    const off = f.outputs_enabled === false ? ` · <span class="bad">channel outputs disabled</span>` : "";
+    now = fppActive(f)
+      ? `<span class="now" ${srcAttrs("fpp", {extra: pollExtra(f) + (f.show ? ` · show began ${when(f.show.start)}` : "")})}><b>${esc(f.playlist || f.sequence || "?")}</b>${f.seconds_remaining ? ` · ${dur(f.seconds_remaining)} left` : ""}<small>${esc(f.sequence || f.song || "")}${off}${f.sequence || f.song ? " · " : ""}${next}</small></span>`
+      : `<span class="now" ${srcAttrs("fpp", {extra: pollExtra(f) + (f.recent_shows?.[0] ? ` · last show ${f.recent_shows[0].playlist} ended ${ago(f.recent_shows[0].end)}` : "")})}>Idle${off}<small>${next}</small></span>`;
+  }
+  const drives = (f.drives || []).map(d => {
+    const live = fppActive(f) && f.status.toLowerCase() === "playing";
+    const dot = !live ? "" : d.receiving ? "ok" : "bad";
+    const word = !live ? "" : d.receiving ? " receiving" : " not receiving";
+    return `<span class="chip" ${srcAttrs("fpp_drive", {extra: `${d.targets.map(tgtText).join("; ")}${live ? (d.receiving ? ". The board lists this FPP as a stream source." : ". The board doesn't list this FPP as a source" + (d.incident ? `: ${d.incident}` : ".")) : ". Checked while FPP plays."}`})}><span class="dot ${dot}"></span>${esc(d.board)}${word}${icon("fpp_drive")}</span>`;
+  }).join("");
+  const reported = (f.reported_by || []).filter(n => !(f.drives || []).some(d => d.board === n));
+  const other = reported.length ? `<span class="chip" ${srcAttrs("board", {field: "fpp", extra: "These boards list this FPP as a peer, but its outputs don't point at them."})}>seen by ${esc(reported.join(", "))}</span>` : "";
+  const none = !drives && !other ? `<span class="note" style="margin:0">${f.outputs?.length ? `Outputs go to ${esc(f.outputs.map(t => t.address).join(", "))}: no monitored board` : f.outputs_error ? "Outputs unknown: " + esc(f.outputs_error) : "No outputs to monitored boards"}</span>` : "";
+  return `<div class="fpprow ${f.enabled ? "" : "off"}">
+    <div><div class="nm">${esc(f.name)}<span class="pill ${cls}">${esc(label)}</span></div><div class="meta">${meta}</div></div>
+    ${now}
+    <div class="chips">${drives}${other}${none}</div></div>`;
+}
+
+function renderFPPs() {
+  renderShowbar();
+  const list = FPPS.filter(f => !f.ignored && f.enabled);
+  $("#fpps").innerHTML = list.length ? `<div class="h">FPP<span class="hint" ${srcAttrs("fpp")}>status every ${esc(list[0].interval)} ${icon("fpp")}</span></div>${list.map(fppRow).join("")}` : "";
+}
+
+// Add FPP dialog
+let fppFound = null;
+function openAddFPP() {
+  fppFound = null;
+  $("#ffHost").value = ""; $("#ffName").value = "";
+  const f = $("#ffFound"); f.className = "found"; f.innerHTML = "";
+  $("#dlgFPP").showModal(); $("#ffHost").focus();
+}
+async function testFPP() {
+  const host = $("#ffHost").value.trim(), f = $("#ffFound");
+  if (!host) { $("#ffHost").reportValidity(); return null; }
+  f.className = "found show"; f.innerHTML = `<span class="spin"></span> Checking ${esc(host)}…`;
+  try {
+    const r = await api("GET", "api/fpps/inspect?host=" + encodeURIComponent(host));
+    fppFound = r;
+    f.className = "found show";
+    f.innerHTML = `<b>${esc(r.host_name || r.host)}</b> · FPP ${esc(r.version)} · ${esc(r.platform)} · ${esc(r.mode)}<br><span style="color:var(--muted)">${esc(r.status)} · answered in ${f1(r.latency_ms)} ms · ${r.outputs.length} network output${r.outputs.length === 1 ? "" : "s"}${r.drives.length ? `, driving ${esc(r.drives.join(", "))}` : ""}</span>` +
+      (r.monitored ? `<br><span class="warn">Already monitored as ${esc(r.monitored)}</span>` : "");
+    if (r.host_name) $("#ffName").placeholder = r.host_name;
+    return r;
+  } catch (e) {
+    fppFound = null;
+    f.className = "found show err"; f.textContent = "No FPP answered there: " + e.message;
+    return null;
+  }
+}
+$("#ffTest").addEventListener("click", testFPP);
+$("#ffHost").addEventListener("input", () => { fppFound = null; });
+$("#fFPP").addEventListener("submit", async ev => {
+  if (ev.submitter?.value !== "save") return;
+  ev.preventDefault();
+  const host = $("#ffHost").value.trim();
+  if (!fppFound || fppFound.host !== host) {
+    const r = await testFPP();
+    if (!r && !confirm("No FPP answered. Add it anyway? It will show as unreachable until it does.")) return;
+  }
+  try {
+    await api("POST", "api/fpps", {host, name: $("#ffName").value.trim() || fppFound?.host_name || host});
+    toast(`Now monitoring FPP ${host}`);
+    $("#dlgFPP").close();
+    await refresh();
+    if ($("#dlgSet").open && setTab === "fpp") renderSettings();
+  } catch (e) { toast(e.message, true); }
+});
+
+function fppSettings() {
+  const list = FPPS.filter(f => !f.ignored), ign = FPPS.filter(f => f.ignored);
+  const row = f => `<div class="fpprow ${f.enabled ? "" : "off"}">
+    <div><div class="nm">${esc(f.name)} <span class="tag" style="--ic:var(--${f.source === "auto" ? "s3" : "s1"})">${f.source === "auto" ? "auto" : "manual"}</span></div><div class="meta">${esc(f.host)}${f.version ? " · FPP " + esc(f.version) : ""}</div></div>
+    <div class="meta">${f.enabled ? (f.up ? esc(f.status) : f.checked ? `<span class="bad">unreachable</span>` : "checking…") : "disabled"}${f.drives?.length ? " · drives " + esc(f.drives.map(d => d.board).join(", ")) : ""}</div>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:flex-end">
+      ${f.ignored ? `<button class="btn sm" type="button" data-fppact="restore" data-fpp="${esc(f.name)}">Restore</button>`
+        : `<label class="check"><input type="checkbox" data-fppact="enable" data-fpp="${esc(f.name)}" ${f.enabled ? "checked" : ""}> Enabled</label>
+           <button class="btn sm ghost" type="button" data-fppact="remove" data-fpp="${esc(f.name)}">${f.source === "auto" ? "Ignore" : "Remove"}</button>`}
+    </div></div>`;
+  return `<p class="note" style="margin-top:0">FPPs the boards report as peers, or that stream to them, are added automatically. The monitor reads each one's status every <b>${esc(SW.intervals?.fpp || "15s")}</b> (set under Monitoring) and its outputs every few minutes, using GET requests only. It uses them to pause DDP probes around shows, to check that a playing show reaches its boards, and to place incidents relative to shows. Changes on this tab apply immediately.</p>
+    <div class="fpplist">${list.map(row).join("") || `<p class="note">No FPPs yet. They appear once a board reports one.</p>`}</div>
+    <div style="margin-top:10px"><button class="btn" type="button" data-fppact="add">＋ Add FPP</button></div>
+    ${ign.length ? `<div class="sechead">Ignored</div><p class="note" style="margin-top:0">Auto-discovered FPPs you removed. Discovery won't add them back.</p><div class="fpplist">${ign.map(row).join("")}</div>` : ""}`;
+}
+async function fppAct(t) {
+  const name = t.dataset.fpp, act = t.dataset.fppact;
+  try {
+    if (act === "add") { openAddFPP(); return; }
+    if (act === "enable") await api("PUT", `api/fpps/${encodeURIComponent(name)}`, {enabled: t.checked});
+    if (act === "restore") await api("PUT", `api/fpps/${encodeURIComponent(name)}`, {ignored: false});
+    if (act === "remove") {
+      const f = FPPS.find(x => x.name === name);
+      if (!confirm(f?.source === "auto" ? `Ignore ${name}? It stops being monitored and discovery won't add it back. You can restore it later.` : `Remove ${name}?`)) return;
+      const r = await api("DELETE", `api/fpps/${encodeURIComponent(name)}`);
+      toast(r?.ignored ? `Ignoring ${name}` : `Removed ${name}`);
+    }
+    await refresh();
+    if ($("#dlgSet").open && setTab === "fpp") { syncForm(); renderSettings(); }
+  } catch (e) { toast(e.message, true); }
 }
 
 // ---------- interactions ----------
@@ -1182,9 +1379,10 @@ $("#upGo").addEventListener("click", async () => {
 
 // ---------- settings ----------
 let SW = null, setTab = "notify";
-const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
-const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", show: "Show not reaching board", memory: "Low memory", recovered: "Recovered", update: "Monitor update available"};
-const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "show", "memory", "recovered"];
+const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["fpp", "FPP"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
+const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", show: "Show not reaching board", memory: "Low memory", recovered: "Recovered",
+  fpp_unreachable: "FPP unreachable / back", show_started: "Show started", show_stopped: "Show stopped", update: "Monitor update available"};
+const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "show", "memory", "recovered", "fpp_unreachable"];
 const CH_TYPES = {
   discord: {label: "Discord", help: "In Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL."},
   slack: {label: "Slack", help: "Create a Slack app with Incoming Webhooks enabled, add it to a channel, and paste its webhook URL."},
@@ -1268,7 +1466,7 @@ function renderSettings() {
   let h = "";
   switch (setTab) {
     case "notify":
-      h = `<p class="note" style="margin-top:0">Where alerts go when a board stops responding, reboots unexpectedly, stops processing DDP, or recovers. Repeats for the same board and event are held back for 2 minutes.</p>
+      h = `<p class="note" style="margin-top:0">Where alerts go when a board stops responding, reboots unexpectedly, stops processing DDP, misses a show, or recovers, and when an FPP goes unreachable (show start/stop alerts are opt-in). Repeats for the same board and event are held back for 2 minutes.</p>
         ${SW.notifications.map(channelCard).join("") || `<p class="note">No channels yet.</p>`}
         <div class="row" style="margin-top:4px"><div class="field"><label>Add a channel</label><select id="chNewType">${Object.entries(CH_TYPES).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join("")}</select></div><button class="btn" type="button" data-chact="add">＋ Add</button></div>
         <div class="sechead">Links in alerts</div>
@@ -1283,6 +1481,7 @@ function renderSettings() {
           ${fld("GET / (web UI)", "intervals.web_ui", "dur")}
           ${fld("GET /settings", "intervals.settings", "dur")}
           ${fld("DDP check", "intervals.ddp_probe", "dur")}
+          ${fld("FPP status", "intervals.fpp", "dur", {help: "GET /api/fppd/status on each FPP"})}
         </div>
         <div class="sechead">DDP check</div>
         <div class="form-grid">
@@ -1290,9 +1489,12 @@ function renderSettings() {
           ${fld("Probe offset", "ddp_probe.offset", "int", {unit: "bytes", help: "Must be past every configured channel so no pixel changes."})}
           ${fld("Packets per check", "ddp_probe.packets", "int")}
           ${fld("Rate", "ddp_probe.rate", "num", {unit: "packets/s"})}
-          ${fld("During shows", "ddp_probe.ignore_fpp", "bool", {check: "Probe even while FPP is playing or about to start", labelAbove: true, help: "Off (recommended): before probing, the monitor asks each FPP the board knows about and waits while it's playing or within 5 minutes of a scheduled show."})}
+          ${fld("During shows", "ddp_probe.ignore_fpp", "bool", {check: "Probe even while FPP is playing or about to start", labelAbove: true, help: "Off (recommended): probes wait while an FPP that drives or is reported by the board is playing, or within 5 minutes of its next scheduled show."})}
         </div>
         <p class="note">Probe packets never set DDP's PUSH flag and use sequence 0, so even if one overlaps a show it can't trigger an output frame or show up as dropped packets. A probe also stops the moment another DDP source appears.</p>`;
+      break;
+    case "fpp":
+      h = fppSettings();
       break;
     case "rules":
       h = `<div class="form-grid">
@@ -1345,6 +1547,8 @@ async function openSettings() {
 $("#dlgSet").addEventListener("click", async ev => {
   const tab = ev.target.closest("[data-settab]");
   if (tab) { syncForm(); setTab = tab.dataset.settab; renderSettings(); return; }
+  const fa = ev.target.closest("[data-fppact]");
+  if (fa && fa.dataset.fppact !== "enable") { fppAct(fa); return; }
   const sa = ev.target.closest("[data-setact]");
   if (sa?.dataset.setact === "origin") { syncForm(); SW.dashboard_url = location.origin; renderSettings(); return; }
   if (sa?.dataset.setact === "gentoken") { const a = new Uint8Array(18); crypto.getRandomValues(a); $("#tokNew").value = btoa(String.fromCharCode(...a)).replace(/[+/=]/g, "").slice(0, 24); return; }
@@ -1367,6 +1571,7 @@ $("#dlgSet").addEventListener("click", async ev => {
   }
 });
 $("#dlgSet").addEventListener("change", ev => {
+  if (ev.target.dataset.fppact === "enable") { fppAct(ev.target); return; }
   if (ev.target.dataset.chk === "enabled") ev.target.closest(".chcard").classList.toggle("off", !ev.target.checked);
 });
 $("#setSave").addEventListener("click", async () => {

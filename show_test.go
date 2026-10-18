@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -138,49 +136,5 @@ func TestShowOutputResolvesWhenFPPStops(t *testing.T) {
 	b.noteShow([]fppFeed{playingFeed("idle", 1)}, t0.Add(40*time.Second))
 	if inc.Ongoing || !strings.Contains(inc.Resolution, "stopped playing") {
 		t.Fatalf("got %+v", inc)
-	}
-}
-
-// fppFeeds reads status, then outputs only for a playing FPP, and matches
-// the board by address.
-func TestFPPFeeds(t *testing.T) {
-	status, hits := `{"status_name":"idle"}`, map[string]int{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits[r.URL.Path]++
-		if r.Method != http.MethodGet {
-			t.Errorf("FPP got a %s", r.Method)
-		}
-		switch r.URL.Path {
-		case "/api/fppd/status":
-			io.WriteString(w, status)
-		case "/api/channel/output/universeOutputs":
-			io.WriteString(w, strings.ReplaceAll(realOutputs, "192.168.6.4", "127.0.0.1"))
-		}
-	}))
-	defer srv.Close()
-	ip := strings.TrimPrefix(srv.URL, "http://")
-	reset := func() {
-		fppCacheMu.Lock()
-		clear(fppCache)
-		fppCacheMu.Unlock()
-	}
-	reset()
-	fpps := []FPPInstance{{Hostname: "fpp", IP: ip}}
-	if f := fppFeeds(context.Background(), fpps, []string{"127.0.0.1"}); len(f) != 1 || f[0].Playing() || hits["/api/channel/output/universeOutputs"] != 0 {
-		t.Fatalf("idle: %+v, hits %v", f, hits)
-	}
-	status = `{"status_name":"playing","current_playlist":{"playlist":"Halloween"},"channelOutputsEnabled":true}`
-	reset()
-	f := fppFeeds(context.Background(), fpps, []string{"127.0.0.1"})
-	if len(f) != 1 || !f[0].Playing() || f[0].What() != "Halloween" || len(f[0].Status.raw) == 0 {
-		t.Fatalf("playing: %+v", f)
-	}
-	reset()
-	fppFeeds(context.Background(), fpps, []string{"127.0.0.1"})
-	if n := hits["/api/channel/output/universeOutputs"]; n != 1 {
-		t.Errorf("outputs fetched %d times, want once (cached)", n)
-	}
-	if f := fppFeeds(context.Background(), fpps, []string{"10.1.1.1"}); f[0].Playing() {
-		t.Error("a board FPP doesn't output to counted as fed")
 	}
 }

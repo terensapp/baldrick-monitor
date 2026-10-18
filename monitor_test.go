@@ -1,13 +1,9 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -231,30 +227,6 @@ func TestProbeFrameIsShowSafe(t *testing.T) {
 	if f[0]>>6 != 1 || f[1] != 0 || f[3] != 1 || len(f) != 13 {
 		t.Errorf("frame header % x", f[:10])
 	}
-}
-
-func TestFPPBusy(t *testing.T) {
-	status := `{"status_name":"idle","scheduler":{"nextPlaylist":{"playlistName":"Halloween","scheduledStartTime":0}}}`
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, status) }))
-	defer srv.Close()
-	ip := strings.TrimPrefix(srv.URL, "http://")
-	fpps := []FPPInstance{{Hostname: "fpp", IP: ip}, {Hostname: "gone", IP: "127.0.0.1:1"}}
-	check := func(want string) {
-		t.Helper()
-		fppCacheMu.Lock()
-		clear(fppCache)
-		fppCacheMu.Unlock()
-		if got := fppBusy(context.Background(), fpps); !strings.Contains(got, want) || (want == "" && got != "") {
-			t.Errorf("fppBusy = %q, want it to contain %q", got, want)
-		}
-	}
-	check("") // idle, nothing scheduled, unreachable FPP ignored
-	status = `{"status_name":"playing","current_playlist":{"playlist":"Halloween"}}`
-	check("is playing Halloween")
-	status = fmt.Sprintf(`{"status_name":"idle","scheduler":{"nextPlaylist":{"playlistName":"Halloween","scheduledStartTime":%d}}}`, time.Now().Add(2*time.Minute).Unix())
-	check("starts Halloween")
-	status = fmt.Sprintf(`{"status_name":"idle","scheduler":{"nextPlaylist":{"playlistName":"Halloween","scheduledStartTime":%d}}}`, time.Now().Add(3*time.Hour).Unix())
-	check("")
 }
 
 func TestProbeOnlyStreamIsNotAShow(t *testing.T) {

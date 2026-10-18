@@ -13,6 +13,7 @@
 //	curl -XPOST 'localhost:8081/_sim/fpp?state=playing&stream=0'  # plays, but its stream never arrives
 //	curl -XPOST 'localhost:8081/_sim/fpp?stream=1'       # ...until it does
 //	curl -XPOST 'localhost:8081/_sim/fpp?target=10.9.9.9' # point its outputs elsewhere
+//	curl -XPOST 'localhost:8081/_sim/fpp?down=1'         # its FPP stops answering (down=0 to recover)
 //	curl -XPOST localhost:8081/_sim/reset          # back to normal
 package main
 
@@ -53,6 +54,8 @@ type sim struct {
 	fppStart   time.Time // its next scheduled show
 	fppStream  bool      // while playing, the board sees a stream from it
 	fppTarget  string    // where its DDP output points
+	fppDown    bool      // the fake FPP doesn't answer
+	fppPlayAt  time.Time // when the current show started
 	listen     string
 }
 
@@ -82,29 +85,57 @@ func main() {
 	mux.HandleFunc("/_sim/", s.control)
 	// The fake board doubles as the FPP it reports, so FPP-aware probing can
 	// be exercised too.
-	mux.HandleFunc("/api/fppd/status", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/fppd/status", s.fppGuard(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		st := map[string]any{"status_name": s.fppState, "current_sequence": "", "current_playlist": map[string]string{"playlist": ""},
-			"scheduler": map[string]any{"nextPlaylist": map[string]any{"playlistName": "", "scheduledStartTime": 0}}}
-		if s.fppState == "playing" {
+			"host_name": "fakefpp", "version": "9.5.3-sim", "platform": "Simulator", "mode_name": "player", "channelOutputsEnabled": true,
+			"seconds_remaining": "0",
+			"scheduler":         map[string]any{"nextPlaylist": map[string]any{"playlistName": "", "scheduledStartTime": 0}}}
+		if s.fppState != "idle" {
 			st["current_playlist"] = map[string]string{"playlist": "Halloween"}
+			st["current_sequence"] = "Thriller.fseq"
+			// Each fake sequence runs 4 minutes.
+			st["seconds_remaining"] = strconv.Itoa(240 - int(time.Since(s.fppPlayAt).Seconds())%240)
 		}
 		if !s.fppStart.IsZero() {
 			st["scheduler"] = map[string]any{"nextPlaylist": map[string]any{"playlistName": "Halloween", "scheduledStartTime": s.fppStart.Unix()}}
 		}
 		s.json(w, st)
-	})
-	mux.HandleFunc("/api/channel/output/universeOutputs", func(w http.ResponseWriter, r *http.Request) {
+	}))
+	mux.HandleFunc("/api/channel/output/universeOutputs", s.fppGuard(func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.json(w, map[string]any{"status": "OK", "channelOutputs": []any{map[string]any{
 			"enabled": 1, "type": "universes", "interface": "eth0", "startChannel": 1, "channelCount": -1,
 			"universes": []any{map[string]any{"active": 1, "address": s.fppTarget, "description": "fakeboard",
 				"startChannel": 1, "channelCount": 300, "type": 4, "id": 1}}}}})
-	})
+	}))
 	log.Printf("fake board on http://%s (DDP %s)", *listen, *ddp)
 	log.Fatal(http.ListenAndServe(*listen, mux))
+}
+
+// fppGuard makes the fake FPP's API refuse to answer while it's "down", and
+// rejects anything but GET: the monitor must never change an FPP.
+func (s *sim) fppGuard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			log.Printf("sim: FPP got a %s %s; the monitor should only GET", r.Method, r.URL.Path)
+			http.Error(w, "GET only", http.StatusMethodNotAllowed)
+			return
+		}
+		s.mu.Lock()
+		down := s.fppDown
+		s.mu.Unlock()
+		if down {
+			if hj, ok := w.(http.Hijacker); ok {
+				c, _, _ := hj.Hijack()
+				c.Close()
+			}
+			return
+		}
+		h(w, r)
+	}
 }
 
 func (s *sim) json(w http.ResponseWriter, v any) {
@@ -229,6 +260,9 @@ func (s *sim) control(w http.ResponseWriter, r *http.Request) {
 	case "fpp":
 		q := r.URL.Query()
 		if st := q.Get("state"); st != "" {
+			if st != s.fppState {
+				s.fppPlayAt = time.Now()
+			}
 			s.fppState = st
 			s.fppStream = st == "playing" // a healthy show reaches the board...
 		}
@@ -238,12 +272,15 @@ func (s *sim) control(w http.ResponseWriter, r *http.Request) {
 		if t := q.Get("target"); t != "" {
 			s.fppTarget = t
 		}
+		if d := q.Get("down"); d != "" {
+			s.fppDown = d == "1"
+		}
 		if in, _ := strconv.Atoi(r.URL.Query().Get("start_in")); in > 0 {
 			s.fppStart = time.Now().Add(time.Duration(in) * time.Second)
 		}
 	case "reset":
 		s.leak, s.hot, s.ddpStall, s.temp, s.ram, s.hangUntil = false, false, false, 30, 115_000, time.Time{}
-		s.fppState, s.fppStart, s.fppStream, s.fppTarget = "idle", time.Time{}, false, fppHost(s.listen)
+		s.fppState, s.fppStart, s.fppStream, s.fppTarget, s.fppDown = "idle", time.Time{}, false, fppHost(s.listen), false
 	default:
 		http.Error(w, "unknown mode", http.StatusNotFound)
 		return
