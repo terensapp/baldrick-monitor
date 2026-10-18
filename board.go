@@ -185,7 +185,9 @@ func NewBoard(cfg BoardConfig, glob *Config, p *Pinger) *Board {
 			MaxIdleConnsPerHost: 1,
 			MaxConnsPerHost:     2,
 			IdleConnTimeout:     30 * time.Second,
-			DialContext:         (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialBoard(ctx, network, addr, 2*time.Second)
+			},
 		}},
 		raw:         map[string]json.RawMessage{},
 		fieldAt:     map[string]FieldUpdate{},
@@ -457,6 +459,28 @@ func (b *Board) checkSettings(ctx context.Context) {
 	}
 }
 
+// Once a lockup is confirmed, the monitor eases off so it doesn't add to the
+// board's trouble: one /ping per lockupRetry, nothing else over HTTP.
+const lockupRetry = 30 * time.Second
+
+// struggling reports whether recent /ping checks are failing.
+func (b *Board) struggling() (failing, lockedUp bool) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.pingFails > 0, b.activeLockup != nil
+}
+
+// dialBoard connects with SO_LINGER 0: closing a connection the board has
+// stopped answering resets it at once, so a struggling board gets the slot
+// back immediately instead of after the kernel's ~15-minute retry window.
+func dialBoard(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+	c, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, network, addr)
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetLinger(0)
+	}
+	return c, err
+}
+
 // httpLoop runs every HTTP check sequentially so the board never sees more
 // than one monitoring request at a time from this loop.
 func (b *Board) httpLoop(ctx context.Context) {
@@ -473,18 +497,29 @@ func (b *Board) httpLoop(ctx context.Context) {
 	defer page.Stop()
 	defer settings.Stop()
 	b.checkPing(ctx)
+	lastPing := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ping.C:
+			if _, locked := b.struggling(); locked && time.Since(lastPing) < lockupRetry {
+				continue
+			}
+			lastPing = time.Now()
 			b.checkPing(ctx)
 		case <-state.C:
-			b.fetchState(ctx)
+			if failing, _ := b.struggling(); !failing {
+				b.fetchState(ctx)
+			}
 		case <-page.C:
-			b.checkPage(ctx)
+			if failing, _ := b.struggling(); !failing {
+				b.checkPage(ctx)
+			}
 		case <-settings.C:
-			b.checkSettings(ctx)
+			if failing, _ := b.struggling(); !failing {
+				b.checkSettings(ctx)
+			}
 		}
 	}
 }
@@ -522,15 +557,28 @@ func (b *Board) icmpLoop(ctx context.Context) {
 
 func (b *Board) wsLoop(ctx context.Context) {
 	first := true
+	// Reconnects back off exponentially (and stay slow while the board is
+	// failing HTTP checks) so a struggling board isn't hammered.
+	const minBackoff, maxBackoff = 2 * time.Second, time.Minute
+	backoff := minBackoff
+	wait := func() {
+		d := backoff
+		if failing, _ := b.struggling(); failing {
+			d = max(d, lockupRetry)
+		}
+		sleepCtx(ctx, d)
+		backoff = min(backoff*2, maxBackoff)
+	}
 	for ctx.Err() == nil {
 		c, err := wsDial(b.cfg.Host, 3*time.Second)
 		if err != nil {
 			b.mu.Lock()
 			b.wsErr = err.Error()
 			b.mu.Unlock()
-			sleepCtx(ctx, 5*time.Second)
+			wait()
 			continue
 		}
+		connectedAt := time.Now()
 		b.mu.Lock()
 		b.wsConnected, b.wsLastMsg, b.wsErr = true, time.Now(), ""
 		b.rec.add("ws", map[string]any{"connected": true})
@@ -598,7 +646,10 @@ func (b *Board) wsLoop(ctx context.Context) {
 		b.rec.add("ws", map[string]any{"connected": false, "err": rerr.Error()})
 		b.addEvent("warn", "WebSocket lost: %v", rerr)
 		b.mu.Unlock()
-		sleepCtx(ctx, 2*time.Second)
+		if time.Since(connectedAt) > 30*time.Second {
+			backoff = minBackoff // it had been healthy; reconnect promptly
+		}
+		wait()
 	}
 }
 
@@ -630,7 +681,9 @@ func (b *Board) ddpLoop(ctx context.Context) {
 	t := time.NewTicker(b.glob.Intervals.DDPProbe.Duration)
 	defer t.Stop()
 	for {
-		b.runProbe(ctx, mode)
+		if failing, _ := b.struggling(); !failing {
+			b.runProbe(ctx, mode)
+		}
 		select {
 		case <-ctx.Done():
 			return

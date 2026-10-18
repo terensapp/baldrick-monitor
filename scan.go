@@ -29,7 +29,9 @@ type Found struct {
 
 var scanClient = &http.Client{Transport: &http.Transport{
 	DisableKeepAlives: true,
-	DialContext:       (&net.Dialer{Timeout: 800 * time.Millisecond}).DialContext,
+	DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialBoard(ctx, network, addr, 800*time.Millisecond)
+	},
 }}
 
 func scanGet(ctx context.Context, url string, v any) error {
@@ -100,7 +102,7 @@ func scanSubnet(ctx context.Context, cidr string) ([]Found, error) {
 			defer func() { <-sem }()
 			host := a.String()
 			// Cheap TCP check first so dead addresses cost < 1s.
-			c, err := (&net.Dialer{Timeout: 700 * time.Millisecond}).DialContext(ctx, "tcp", net.JoinHostPort(host, "80"))
+			c, err := dialBoard(ctx, "tcp", net.JoinHostPort(host, "80"), 700*time.Millisecond)
 			if err != nil {
 				return
 			}

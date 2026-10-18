@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base64"
@@ -24,7 +25,7 @@ type wsConn struct {
 }
 
 func wsDial(host string, timeout time.Duration) (*wsConn, error) {
-	c, err := net.DialTimeout("tcp", httpAddr(host), timeout)
+	c, err := dialBoard(context.Background(), "tcp", httpAddr(host), timeout)
 	if err != nil {
 		return nil, err
 	}

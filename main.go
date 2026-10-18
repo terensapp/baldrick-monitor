@@ -300,6 +300,21 @@ func main() {
 		}
 		writeJSON(w, inc)
 	}))
+	mux.HandleFunc("POST /api/incidents/ack-all", admin(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Board string `json:"board"` // empty = every board
+			Note  string `json:"note"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		n := 0
+		for _, b := range reg.List() {
+			if body.Board == "" || body.Board == b.cfg.Name {
+				n += b.AckAll(Ack{At: time.Now(), Note: strings.TrimSpace(body.Note), By: host})
+			}
+		}
+		writeJSON(w, map[string]int{"acknowledged": n})
+	}))
 	mux.HandleFunc("POST /api/incidents/{id}/reopen", admin(func(w http.ResponseWriter, r *http.Request) {
 		b, id := incidentBoard(w, r)
 		if b == nil {

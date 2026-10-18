@@ -285,7 +285,7 @@ svg[data-chart] { cursor: crosshair; touch-action: pan-y; }
 <dialog id="dlgIncs" class="xl"><form method="dialog">
   <h3 id="ilTitle">Incidents</h3>
   <p class="lead">Reboots, lockups and DDP failures the monitor has caught, kept <span id="ilKeep">90</span> days. Each one keeps the telemetry leading up to it.</p>
-  <div class="tabs"><button type="button" data-iltab="open" class="on">Needs attention</button><button type="button" data-iltab="all">All</button></div>
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><div class="tabs"><button type="button" data-iltab="open" class="on">Needs attention</button><button type="button" data-iltab="all">All</button></div><button class="btn sm" type="button" id="ilAckAll">Acknowledge all</button></div>
   <div class="dlgbody" id="ilOut"></div>
   <div class="foot"><button class="btn ghost" value="close">Close</button></div>
 </form></dialog>
@@ -930,7 +930,7 @@ function incBanner(b) {
       <button class="btn sm" type="button" data-inc="${esc(i.id)}" data-iact="view">Details</button>
       <a class="btn sm" href="${exportURL(i)}" download>Export telemetry</a>
       <button class="btn sm primary" type="button" data-inc="${esc(i.id)}" data-iact="ack">Acknowledge</button>
-      ${list.length > 1 ? `<button class="btn sm ghost" type="button" data-act="incidents">+${list.length - 1} more</button>` : ""}
+      ${list.length > 1 ? `<button class="btn sm" type="button" data-ackall="${esc(b.name)}">Acknowledge all ${list.length}</button><button class="btn sm ghost" type="button" data-act="incidents">+${list.length - 1} more</button>` : ""}
     </div></div>`;
 }
 
@@ -1062,6 +1062,19 @@ async function openIncident(id) {
   history.replaceState(null, "", "#incident=" + i.id);
 }
 $("#dlgInc").addEventListener("close", () => { if (location.hash.startsWith("#incident=")) history.replaceState(null, "", location.pathname + location.search); });
+
+async function ackAll(board) {
+  const what = board ? `every incident for ${board}` : "every incident on every board";
+  const note = prompt(`Acknowledge ${what} that's no longer in progress?\n\nOptional note:`, "");
+  if (note === null) return;
+  try {
+    const r = await api("POST", "api/incidents/ack-all", {board: board || "", note});
+    toast(`Acknowledged ${r.acknowledged} incident${r.acknowledged === 1 ? "" : "s"}`);
+    refresh(); if ($("#dlgIncs").open) renderIncidents();
+  } catch (e) { toast(e.message, true); }
+}
+document.addEventListener("click", ev => { const t = ev.target.closest("[data-ackall]"); if (t) ackAll(t.dataset.ackall); });
+$("#ilAckAll").addEventListener("click", () => ackAll(ilBoard));
 
 let acking = null;
 function openAck(id) {

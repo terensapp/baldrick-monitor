@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -284,6 +283,27 @@ func (b *Board) SetAck(id string, ack *Ack) (Incident, error) {
 	return Incident{}, errNoIncident
 }
 
+// AckAll acknowledges every incident still alerting, except ones in
+// progress, and returns how many it acknowledged.
+func (b *Board) AckAll(ack Ack) int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for _, inc := range b.incidents {
+		if inc.Ack != nil || inc.Ongoing {
+			continue
+		}
+		a := ack
+		inc.Ack = &a
+		b.persist(inc, nil)
+		n++
+	}
+	if n > 0 {
+		b.addEvent("info", "%d incident(s) acknowledged%s", n, noteSuffix(ack.Note))
+	}
+	return n
+}
+
 func noteSuffix(n string) string {
 	if n == "" {
 		return ""
@@ -511,7 +531,7 @@ func (b *Board) diagSweep(ctx context.Context) []DiagResult {
 	var out []DiagResult
 	addr := httpAddr(b.cfg.Host)
 	start := time.Now()
-	c, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", addr)
+	c, err := dialBoard(ctx, "tcp", addr, 3*time.Second)
 	d := DiagResult{T: start, Check: "tcp connect " + addr, Ms: ms(time.Since(start)), OK: err == nil}
 	if err != nil {
 		d.Detail = err.Error()
