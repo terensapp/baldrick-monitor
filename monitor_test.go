@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -363,5 +364,65 @@ func TestPartialNestedUpdatesMerge(t *testing.T) {
 	b.mergeState([]byte(`{"streaming":{"ddp_sources":[]}}`), "ws") // stream ended
 	if v := b.View(); len(v.DDP.Sources) != 0 {
 		t.Errorf("an explicit empty source list should clear it, got %v", v.DDP.Sources)
+	}
+}
+
+// A board on its way down answers once between failures; that must not end
+// the lockup and start a new one.
+func TestLockupNeedsSustainedRecovery(t *testing.T) {
+	b := testBoard(t)
+	fail := errors.New("timeout")
+	t0 := time.Now()
+	down := b.glob.th().HTTPFailDown
+	var started bool
+	for i := 0; i < down; i++ {
+		started, _ = b.notePing(fail, time.Second, t0.Add(time.Duration(i)*time.Second))
+	}
+	if !started {
+		t.Fatal("lockup didn't start")
+	}
+	lk := &Incident{ID: "lk", Type: "lockup", StartedAt: t0, Ongoing: true}
+	b.activeLockup = lk
+
+	at := t0.Add(time.Minute)
+	if _, rec := b.notePing(nil, 0, at); !rec.IsZero() {
+		t.Fatal("one answer ended the lockup")
+	}
+	if started, _ := b.notePing(fail, time.Second, at.Add(30*time.Second)); started {
+		t.Fatal("a failure after a lone answer started a second lockup")
+	}
+	at = at.Add(time.Minute)
+	for i, step := range []time.Duration{0, 30 * time.Second, 60 * time.Second} {
+		_, rec := b.notePing(nil, 0, at.Add(step))
+		if done := !rec.IsZero(); done != (i == 2) {
+			t.Fatalf("answer %d: recovered=%v", i+1, done)
+		}
+		if i == 2 && !rec.Equal(at) {
+			t.Fatalf("recovered at %v, want the first answer of the streak %v", rec, at)
+		}
+	}
+}
+
+func TestLockupMemoryFindings(t *testing.T) {
+	b := testBoard(t)
+	b.mergeState([]byte(`{"board_model":"Baldrick 8 Port v1","uptime":5000,"ram_available":110000,"ram_minimum":30000,"ram_largest_block":90000,"oom_count":0,"temperature":[30]}`), "ws")
+	b.mu.Lock()
+	inc := &Incident{ID: "lk", Type: "lockup", StartedAt: time.Now().Add(-time.Hour), DetectedAt: time.Now().Add(-time.Hour), Before: snapshotOf(&b.st, b.stateAt)}
+	b.mu.Unlock()
+	b.mergeState([]byte(`{"uptime":8600,"ram_minimum":52,"oom_count":20102}`), "poll")
+	b.mu.Lock()
+	b.analyzeLockup(inc)
+	b.mu.Unlock()
+	all := strings.Join(inc.Findings, "\n")
+	for _, want := range []string{"low-water mark since boot was only 29 KB", "Out-of-memory count rose from 0 to 20102", "fell from 29 KB to 0 KB"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("missing %q in:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "Memory looked healthy") {
+		t.Errorf("called memory healthy:\n%s", all)
+	}
+	if !strings.HasPrefix(inc.Cause, "Out of memory") {
+		t.Errorf("cause = %q", inc.Cause)
 	}
 }

@@ -147,6 +147,8 @@ type Board struct {
 	pingFails          int
 	firstFailAt        time.Time // first failure of the current /ping failure streak
 	lastHTTPOK         time.Time
+	recoverOKs         int       // /ping answers in a row during a lockup
+	recoverSince       time.Time // first answer of that streak
 	httpEverOK         bool
 	endpoints          map[string]*EndpointStats
 
@@ -507,36 +509,64 @@ func (b *Board) checkPing(ctx context.Context) {
 		r.err = errors.New("/ping returned invalid JSON")
 	}
 	b.record("/ping", r)
-	down := b.glob.th().HTTPFailDown
-	now := time.Now()
-	b.mu.Lock()
-	if r.err != nil {
-		b.httpPing.add(math.NaN())
-		b.pingFails++
-		if b.pingFails == 1 {
-			b.firstFailAt = now.Add(-r.elapsed)
-		}
-		start := b.pingFails == down
-		b.mu.Unlock()
-		if start {
-			b.startLockup(ctx, r.err)
-		}
-		return
+	start, recoveredAt := b.notePing(r.err, r.elapsed, time.Now())
+	if start {
+		b.startLockup(ctx, r.err)
 	}
-	b.httpPing.add(ms(r.elapsed))
-	b.pingFails, b.httpEverOK, b.lastHTTPOK = 0, true, now
-	lockedUp := b.activeLockup != nil
-	b.mu.Unlock()
-	if lockedUp {
+	if !recoveredAt.IsZero() {
 		// Read the state first so a reboot during the lockup is noticed
 		// before the recovery is described.
 		b.fetchState(ctx)
 		b.mu.Lock()
-		b.endLockup(now)
+		b.endLockup(recoveredAt)
 		b.mu.Unlock()
 		b.checkPage(ctx) // clear stale endpoint failures right away
 		b.checkSettings(ctx)
 	}
+}
+
+// A locked-up board counts as recovered only once /ping has answered
+// lockupRecoverOKs times in a row over at least lockupRecoverFor. A board on
+// its way down often answers once between failures; ending the lockup on
+// that splits one outage into many.
+const (
+	lockupRecoverOKs = 3
+	lockupRecoverFor = time.Minute
+)
+
+// notePing records a /ping result. It reports whether a lockup should start,
+// and when a lockup has recovered, the time of the first answer in the
+// streak that confirmed it.
+func (b *Board) notePing(err error, elapsed time.Duration, now time.Time) (start bool, recoveredAt time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err != nil {
+		b.httpPing.add(math.NaN())
+		b.pingFails++
+		if b.pingFails == 1 {
+			b.firstFailAt = now.Add(-elapsed)
+		}
+		if b.activeLockup != nil && b.recoverOKs > 0 {
+			b.addEvent("warn", "Answered %d× then failed again; still not responding", b.recoverOKs)
+		}
+		b.recoverOKs, b.recoverSince = 0, time.Time{}
+		return b.pingFails == b.glob.th().HTTPFailDown, time.Time{}
+	}
+	b.httpPing.add(ms(elapsed))
+	b.pingFails, b.httpEverOK, b.lastHTTPOK = 0, true, now
+	if b.activeLockup == nil {
+		return false, time.Time{}
+	}
+	if b.recoverOKs == 0 {
+		b.recoverSince = now.Add(-elapsed)
+	}
+	b.recoverOKs++
+	if b.recoverOKs < lockupRecoverOKs || now.Sub(b.recoverSince) < lockupRecoverFor {
+		return false, time.Time{}
+	}
+	at := b.recoverSince
+	b.recoverOKs, b.recoverSince = 0, time.Time{}
+	return false, at
 }
 
 func (b *Board) fetchState(ctx context.Context) (*SystemState, error) {

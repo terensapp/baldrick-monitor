@@ -1070,7 +1070,13 @@ func (b *Board) leadUp(inc *Incident, tl []RecPoint, until time.Time) (f []strin
 		add("Free memory fell from %.0f KB to %.0f KB over %s, which looks like a leak.", l.ramFirst/1024, l.ramLast/1024, l.ramSpan.Round(time.Second))
 		setCause("Possible memory leak: free memory fell steadily beforehand.")
 	} else if l.ramLast > 0 && cause == "" {
-		add("Memory looked healthy: %.0f KB free (low-water %.0f KB since boot), largest block %.0f KB.", l.ramLast/1024, bs.RAMMinimum/1024, l.blkMin/1024)
+		if bs.RAMMinimum > 0 && bs.RAMMinimum < th.RAMMinWarnBytes {
+			// Free memory can look fine between spikes while the
+			// low-water mark shows the board has nearly run out.
+			add("Free memory looked fine (%.0f KB, largest block %.0f KB), but the low-water mark since boot was only %.0f KB (warning below %.0f KB): at some point it came close to running out.", l.ramLast/1024, l.blkMin/1024, bs.RAMMinimum/1024, th.RAMMinWarnBytes/1024)
+		} else {
+			add("Memory looked healthy: %.0f KB free (low-water %.0f KB since boot), largest block %.0f KB.", l.ramLast/1024, bs.RAMMinimum/1024, l.blkMin/1024)
+		}
 	}
 	if !math.IsInf(l.tempMax, -1) {
 		if l.tempMax > th.TempWarnC {
@@ -1299,10 +1305,33 @@ func (b *Board) analyzeLockup(inc *Incident) {
 	}
 	lf, lc := b.leadUp(inc, tl, inc.StartedAt)
 	inc.Findings = append(f, lf...)
+	df, dc := b.duringLockup(inc)
+	inc.Findings = append(inc.Findings, df...)
+	if lc == "" {
+		lc = dc
+	}
 	inc.Cause = mode
 	if lc != "" {
 		inc.Cause = lc + " " + mode
 	}
+}
+
+// duringLockup compares the board's memory counters now with those from
+// when the lockup started (b.mu held). It says nothing across a reboot,
+// which resets them.
+func (b *Board) duringLockup(inc *Incident) (f []string, cause string) {
+	bs := inc.Before
+	if inc.Ongoing || inc.Rebooted || !b.haveState || bs.At.IsZero() || b.st.Uptime < bs.Uptime {
+		return nil, ""
+	}
+	if b.st.OOMCount > bs.OOMCount {
+		f = append(f, fmt.Sprintf("Out-of-memory count rose from %.0f to %.0f during the lockup.", bs.OOMCount, b.st.OOMCount))
+		cause = "Out of memory: allocations failed while it was stuck."
+	}
+	if bs.RAMMinimum > 0 && b.st.RAMMinimum < bs.RAMMinimum-1024 {
+		f = append(f, fmt.Sprintf("Low-water mark fell from %.0f KB to %.0f KB during the lockup.", bs.RAMMinimum/1024, b.st.RAMMinimum/1024))
+	}
+	return f, cause
 }
 
 func topCode(codes map[int]int) int {
