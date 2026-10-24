@@ -281,6 +281,58 @@ In the config file:
 
 `days` uses 0 for Sunday; leave it out for every day.
 
+## Remote control from Discord
+
+A Discord bot inside the monitor takes commands from one channel, so the
+show can be run from a phone. It connects out to Discord's gateway; nothing
+needs to be reachable from the internet. Type commands as plain messages or
+use the matching slash commands (which autocomplete board, FPP and playlist
+names):
+
+| Command | Does |
+|---|---|
+| `status [board]` | Every board: up / locked up (and for how long), uptime, OOM count, lowest free memory, reasons |
+| `reboot <board>` | Reboots the board the way its web UI does (`GET /reboot`). **Asks first.** The reboot that follows is filed as "Rebooted on request", not as a crash |
+| `fpp [fpp]` | What each FPP is playing, time left, volume, next scheduled show |
+| `playlists [fpp]` | Playlist names |
+| `play <playlist> [on <fpp>]` | Starts a playlist. Without `on`, uses whichever FPP has it. **Asks first** if that FPP is already playing |
+| `stop [fpp]` / `stop [fpp] after` | Stops now / after the current song (`stopgracefully`). **Asks first.** Without an FPP, stops the only one playing |
+| `volume <fpp> [0-100]` | Reads or sets the volume |
+| `maint <board> [on\|off] [3h] [note]` | Maintenance mode (`maint pixel1 3h`, `maint pixel1 off`); `maint` alone lists boards in it |
+| `ack [board\|all] [note]` | Acknowledges open incidents |
+| `incidents` | Incidents still alerting |
+| `help` | The list |
+
+Board and FPP names match case-insensitively or by a unique prefix
+(`reboot pixelt`). A question is answered with its buttons or by replying
+`yes` / `no`, only by whoever asked, within 2 minutes.
+
+Only user IDs on the allowlist are obeyed, and only in the configured
+channel; anything else is ignored (and logged). The token is never sent to
+the browser or logged.
+
+Setup:
+
+1. [Discord Developer Portal](https://discord.com/developers/applications)
+   → **New Application** → **Bot**: **Reset Token** and copy it, and turn on
+   **Message Content Intent** (needed for plain-text commands; without it,
+   slash commands and messages that @mention the bot still work).
+2. **OAuth2 → URL Generator**: scopes `bot` and `applications.commands`;
+   permissions View Channel, Send Messages, Read Message History. Open the
+   URL and add the bot to your server.
+3. In Discord, turn on Developer Mode (User Settings → Advanced), then
+   right-click the channel → **Copy Channel ID** and yourself → **Copy User
+   ID**.
+4. **⚙ Settings → Discord bot**: paste the token, channel ID and your user
+   ID, tick **Run the Discord bot**, save. The status line shows whether it
+   connected and whether plain-text and slash commands are on.
+
+In the config file:
+
+```json
+"discord": {"enabled": true, "token": "…", "channel_id": "123456789012345678", "allowed_users": ["223456789012345678"]}
+```
+
 ## Settings
 
 **⚙ Settings** in the header covers what you'd otherwise edit in the config

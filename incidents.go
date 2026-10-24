@@ -450,7 +450,12 @@ func (b *Board) onReboot(old *SystemState, prev *lastState, oldUptimeAt time.Tim
 		inc.Before = Snapshot{At: prev.At, Uptime: prev.Uptime, Firmware: prev.Firmware}
 	}
 
+	requestedBy, requested := b.requestedRebootLocked(rebootAt)
 	switch {
+	case requested:
+		inc.Kind, inc.Title = "requested", "Rebooted on request"
+		inc.Cause = "Reboot requested by " + requestedBy + "."
+		inc.Ack = &Ack{At: now, Auto: true, Note: "Expected: requested by " + requestedBy}
 	case newFW != "" && oldFW != "" && newFW != oldFW:
 		inc.Kind, inc.Title = "firmware_update", "Rebooted into new firmware "+newFW
 		inc.Cause = fmt.Sprintf("Firmware update from %s to %s.", oldFW, newFW)

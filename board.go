@@ -178,7 +178,8 @@ type Board struct {
 	activeLockup *Incident
 	activeDDP    *Incident
 	ddpFails     int
-	maint        *Maintenance // b.cfg.Maintenance is only the starting value
+	maint        *Maintenance     // b.cfg.Maintenance is only the starting value
+	rebootReq    *requestedReboot // a reboot someone asked for, until it shows up
 	activeShow   *Incident
 	showMissing  map[string]time.Time // FPP IP → when its stream was first missing during a show
 	fpps         *FPPRegistry         // nil when FPPs aren't watched (tests)

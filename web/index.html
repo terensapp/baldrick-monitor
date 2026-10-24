@@ -1428,7 +1428,7 @@ $("#upGo").addEventListener("click", async () => {
 
 // ---------- settings ----------
 let SW = null, setTab = "notify";
-const SET_TABS = [["notify", "Notifications"], ["monitor", "Monitoring"], ["fpp", "FPP"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
+const SET_TABS = [["notify", "Notifications"], ["discord", "Discord bot"], ["monitor", "Monitoring"], ["fpp", "FPP"], ["rules", "Alert rules"], ["data", "Data"], ["access", "Access & updates"]];
 const EVENT_LABEL = {lockup: "Stopped responding", reboot: "Unexpected reboot", ddp: "DDP failure", show: "Show not reaching board", memory: "Low memory", recovered: "Recovered",
   fpp_unreachable: "FPP unreachable / back", show_started: "Show started", show_stopped: "Show stopped", update: "Monitor update available"};
 const DEFAULT_EVENTS = ["lockup", "reboot", "ddp", "show", "memory", "recovered", "fpp_unreachable"];
@@ -1450,6 +1450,7 @@ const conv = {
   kb: [v => v == null ? "" : Math.round(v / 1024), v => v === "" ? 0 : parseFloat(v) * 1024],
   temp: [v => v == null ? "" : +toUnit(v).toFixed(1), v => v === "" ? 0 : (tUnit() === "F" ? (parseFloat(v) - 32) * 5 / 9 : parseFloat(v))],
   bool: [v => !!v, v => v],
+  list: [v => (v || []).join(", "), v => v.split(/[,;\s]+/).filter(Boolean)],
 };
 function fld(label, key, type = "str", o = {}) {
   const raw = getPath(o.obj || SW, key), v = conv[type][0](raw);
@@ -1523,6 +1524,23 @@ function quietHours() {
     <div class="field"><label>Starting on</label><div class="days">${DAY_NAMES.map((d, i) => `<label><input type="checkbox" data-qday="${i}" ${days.includes(i) ? "checked" : ""}> ${d}</label>`).join("")}</div></div>
     ${fld("", "quiet_hours.allow_lockups", "bool", {check: "Still send “Stopped responding” alerts (and their recoveries) right away"})}`;
 }
+function discordSettings() {
+  const d = SW.discord ??= {enabled: false, channel_id: "", allowed_users: []};
+  const st = d.status || {state: "off"};
+  const state = {connected: `<span class="good">● Connected${st.user ? ` as ${esc(st.user)}` : ""}</span>`, connecting: `<span class="warn">● Connecting…</span>`,
+    error: `<span class="bad">● Not connected</span>`, off: `<span class="note">● Off</span>`}[st.state] || esc(st.state);
+  const caps = st.state === "connected" ? ` · slash commands ${st.slash_commands ? "on" : "off"} · plain-text commands ${st.text_commands ? "on" : "off (enable Message Content Intent, or @mention the bot)"}` : "";
+  return `<p class="note" style="margin-top:0">Control the show from a Discord channel: <code>status</code>, <code>reboot pixel1</code>, <code>play Halloween on fpp</code>, <code>stop fpp</code>, <code>volume fpp 50</code>, <code>maint pixel1 3h</code>, <code>ack all</code>, <code>help</code>, or the same as slash commands. Reboots and stopping a show ask for a yes first. Only the users below are obeyed, and only in this channel.</p>
+    <div class="field"><label>Status</label><div>${state}${esc(caps)}${st.error ? `<div class="bad" style="margin-top:4px">${esc(st.error)}</div>` : ""}</div></div>
+    ${fld("Discord bot", "discord.enabled", "bool", {check: "Run the Discord bot"})}
+    <div class="form-grid">
+      ${fld("Bot token", "discord.token", "str", {secret: true, ph: d.token_set ? "saved (leave blank to keep)" : "from the Developer Portal → Bot → Reset Token"})}
+      ${d.token_set ? `<div class="field"><label>&nbsp;</label><label class="check"><input type="checkbox" id="discordClear"> Remove the saved token</label></div>` : ""}
+      ${fld("Channel ID", "discord.channel_id", "str", {ph: "123456789012345678", help: "Turn on Developer Mode (User Settings → Advanced), then right-click the channel → Copy Channel ID."})}
+      ${fld("Allowed user IDs", "discord.allowed_users", "list", {ph: "your user ID", help: "Right-click yourself → Copy User ID. Separate several with commas."})}
+    </div>
+    <p class="note">Setup: <a href="https://discord.com/developers/applications" target="_blank" rel="noopener">Developer Portal</a> → New Application → Bot: copy the token and turn on <b>Message Content Intent</b> (for plain-text commands). Then OAuth2 → URL Generator: scopes <code>bot</code> and <code>applications.commands</code>, permissions View Channel, Send Messages, Read Message History; open the URL to add the bot to your server. Alerts still go out through the Discord webhook on the Notifications tab.</p>`;
+}
 function renderSettings() {
   $("#setTabs").innerHTML = SET_TABS.map(([k, l]) => `<button type="button" data-settab="${k}" class="${setTab === k ? "on" : ""}">${l}</button>`).join("");
   const ro = SW.read_only || {};
@@ -1537,6 +1555,9 @@ function renderSettings() {
         ${quietHours()}
         <div class="sechead">Links in alerts</div>
         <div class="row">${fld("Dashboard URL", "dashboard_url", "str", {ph: location.origin, help: "Alerts link straight to the incident on this dashboard."})}<button class="btn" type="button" data-setact="origin">Use this address</button></div>`;
+      break;
+    case "discord":
+      h = discordSettings();
       break;
     case "monitor":
       h = `<div class="sechead">Polling intervals</div><p class="note" style="margin-top:0">Go durations like <code>500ms</code>, <code>5s</code>, <code>2m</code>. The board's WebSocket feed is always live; these are the checks the monitor makes itself.</p>
@@ -1649,6 +1670,8 @@ $("#setSave").addEventListener("click", async () => {
   const tok = $("#tokNew")?.value.trim() || "";
   body.new_admin_token = tok;
   body.clear_admin_token = !!$("#tokClear")?.checked;
+  body.clear_discord_token = !!$("#discordClear")?.checked;
+  if (body.discord) { body.discord = {...body.discord}; delete body.discord.status; delete body.discord.token_set; }
   const b = $("#setSave"); b.disabled = true; b.textContent = "Saving…";
   try {
     const r = await api("PUT", "api/settings", body);

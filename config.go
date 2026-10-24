@@ -148,6 +148,8 @@ type Config struct {
 	Thresholds    Thresholds    `json:"thresholds"`
 	// Hold notifications overnight (or whenever) and summarise them after.
 	QuietHours QuietHours `json:"quiet_hours"`
+	// Remote control from a Discord channel.
+	Discord DiscordConfig `json:"discord"`
 
 	live *liveHolder // settings applied without restarting monitoring
 }
@@ -298,6 +300,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateRanges(); err != nil {
+		return err
+	}
+	if err := c.Discord.normalize(); err != nil {
 		return err
 	}
 	ids := map[string]bool{}

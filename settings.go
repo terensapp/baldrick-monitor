@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -28,20 +29,23 @@ type UISettings struct {
 	UpdateInterval  Duration        `json:"update_check_interval"`
 	UpdatesDisabled bool            `json:"updates_disabled"`
 	QuietHours      QuietHours      `json:"quiet_hours"`
+	Discord         DiscordConfig   `json:"discord"`
 	AdminToken      string          `json:"admin_token,omitempty"` // never sent to the browser
 }
 
 func (c *Config) uiSettings() UISettings {
 	q := c.QuietHours
 	q.Days = slices.Clone(q.Days)
-	return UISettings{
+	s := UISettings{
 		TemperatureUnit: c.TemperatureUnit, DashboardURL: c.DashboardURL,
 		Notifications: slices.Clone(c.Notifications), Thresholds: c.Thresholds,
 		Intervals: c.Intervals, DDPProbe: c.DDPProbe,
 		HistoryDays: c.History.RetentionDays, Resolution: c.History.Resolution,
 		Incidents: c.Incidents, UpdateInterval: c.Updates.CheckInterval, UpdatesDisabled: c.Updates.Disabled,
-		QuietHours: q, AdminToken: c.AdminToken,
+		QuietHours: q, AdminToken: c.AdminToken, Discord: c.Discord,
 	}
+	s.Discord.AllowedUsers = slices.Clone(c.Discord.AllowedUsers)
+	return s
 }
 
 func (s UISettings) applyTo(c *Config) {
@@ -52,6 +56,8 @@ func (s UISettings) applyTo(c *Config) {
 	c.Incidents = s.Incidents
 	c.Updates.CheckInterval, c.Updates.Disabled = s.UpdateInterval, s.UpdatesDisabled
 	c.AdminToken, c.QuietHours = s.AdminToken, s.QuietHours
+	c.Discord = s.Discord
+	c.Discord.AllowedUsers = slices.Clone(s.Discord.AllowedUsers)
 	// The legacy alerts block has been folded into Notifications.
 	c.Alerts = AlertsConfig{}
 }
@@ -112,9 +118,17 @@ type ChannelView struct {
 	TokenSet    bool   `json:"token_set"`
 }
 
+// DiscordView is the bot's settings with the token replaced by a flag.
+type DiscordView struct {
+	DiscordConfig
+	TokenSet bool          `json:"token_set"`
+	Status   DiscordStatus `json:"status"`
+}
+
 type SettingsView struct {
 	UISettings
 	Notifications []ChannelView  `json:"notifications"`
+	Discord       DiscordView    `json:"discord"`
 	AuthRequired  bool           `json:"auth_required"`
 	Events        []string       `json:"events"`
 	ReadOnly      map[string]any `json:"read_only"`
@@ -132,7 +146,12 @@ func maskChannel(ch Channel) ChannelView {
 func (c *Config) settingsView(configPath string) SettingsView {
 	s := c.uiSettings()
 	s.AdminToken = ""
-	v := SettingsView{UISettings: s, AuthRequired: c.token() != "", Events: AlertEvents}
+	v := SettingsView{UISettings: s, AuthRequired: c.token() != "", Events: AlertEvents,
+		Discord: DiscordView{DiscordConfig: s.Discord, TokenSet: s.Discord.Token != ""}}
+	v.UISettings.Discord.Token, v.Discord.Token = "", ""
+	if v.Discord.AllowedUsers == nil {
+		v.Discord.AllowedUsers = []string{}
+	}
 	for _, ch := range c.Notifications {
 		v.Notifications = append(v.Notifications, maskChannel(ch))
 	}
@@ -153,6 +172,8 @@ type SettingsUpdate struct {
 	UISettings
 	NewAdminToken   string `json:"new_admin_token"`
 	ClearAdminToken bool   `json:"clear_admin_token"`
+	// A blank discord.token keeps the saved one.
+	ClearDiscordToken bool `json:"clear_discord_token"`
 }
 
 func (c *Config) keepSecrets(ch *Channel) {
@@ -178,6 +199,12 @@ func (c *Config) withSettings(u SettingsUpdate) (*Config, bool, error) {
 	s := u.UISettings
 	for i := range s.Notifications {
 		c.keepSecrets(&s.Notifications[i])
+	}
+	switch {
+	case u.ClearDiscordToken:
+		s.Discord.Token = ""
+	case strings.TrimSpace(s.Discord.Token) == "":
+		s.Discord.Token = c.Discord.Token
 	}
 	switch {
 	case u.ClearAdminToken:

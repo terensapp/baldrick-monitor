@@ -72,6 +72,14 @@ func main() {
 	go fpps.Run(ctx)
 	upd := NewUpdater(cfg)
 	go upd.Run(ctx)
+	bot := NewDiscordBot(monitorBackend{reg: reg, fppr: fpps})
+	bot.SetConfig(cfg.Discord)
+	go bot.Run(ctx)
+	settingsView := func(c *Config) SettingsView {
+		v := c.settingsView(*cfgPath)
+		v.Discord.Status = bot.Status()
+		return v
+	}
 	views := func() []BoardView {
 		list := reg.List()
 		out := make([]BoardView, len(list))
@@ -133,7 +141,7 @@ func main() {
 		})
 	})
 	mux.HandleFunc("GET /api/settings", admin(func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, cur.Load().settingsView(*cfgPath))
+		writeJSON(w, settingsView(cur.Load()))
 	}))
 	mux.HandleFunc("PUT /api/settings", admin(func(w http.ResponseWriter, r *http.Request) {
 		var u SettingsUpdate
@@ -155,11 +163,12 @@ func main() {
 		cur.Store(n)
 		upd.SetConfig(n)
 		fpps.SetConfig(n)
+		bot.SetConfig(n.Discord)
 		if restart {
 			reg.Reconfigure(n)
 		}
 		log.Printf("settings saved from %s (restarted monitoring: %v)", r.RemoteAddr, restart)
-		writeJSON(w, map[string]any{"settings": n.settingsView(*cfgPath), "restarted": restart,
+		writeJSON(w, map[string]any{"settings": settingsView(n), "restarted": restart,
 			"token_changed": n.AdminToken != old.AdminToken})
 	}))
 	mux.HandleFunc("POST /api/settings/test-channel", admin(func(w http.ResponseWriter, r *http.Request) {

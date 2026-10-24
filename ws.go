@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -12,16 +13,32 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
 
 // wsConn is a minimal WebSocket client: enough for the board's "baldrick"
-// subprotocol (small JSON text frames, client keepalives).
+// subprotocol (small JSON text frames, client keepalives) and Discord's
+// gateway (JSON over TLS).
 type wsConn struct {
-	c   net.Conn
-	br  *bufio.Reader
-	wmu sync.Mutex
+	c    net.Conn
+	br   *bufio.Reader
+	wmu  sync.Mutex
+	peer string // who closes it, for errors
+}
+
+// wsCloseError is a close frame from the other end.
+type wsCloseError struct {
+	Peer string
+	Code int // 0 when the frame carried none
+}
+
+func (e *wsCloseError) Error() string {
+	if e.Code == 0 {
+		return "closed by " + e.Peer
+	}
+	return fmt.Sprintf("closed by %s (code %d)", e.Peer, e.Code)
 }
 
 func wsDial(host string, timeout time.Duration) (*wsConn, error) {
@@ -29,12 +46,45 @@ func wsDial(host string, timeout time.Duration) (*wsConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return wsHandshake(c, host, "/ws", "baldrick", "board", timeout)
+}
+
+// wsDialURL connects to a ws:// or wss:// URL.
+func wsDialURL(ctx context.Context, raw, peer string, timeout time.Duration) (*wsConn, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	addr := u.Host
+	if u.Port() == "" {
+		addr = net.JoinHostPort(u.Hostname(), map[string]string{"wss": "443", "ws": "80"}[u.Scheme])
+	}
+	d := &net.Dialer{Timeout: timeout}
+	var c net.Conn
+	switch u.Scheme {
+	case "wss":
+		c, err = (&tls.Dialer{NetDialer: d, Config: &tls.Config{ServerName: u.Hostname()}}).DialContext(ctx, "tcp", addr)
+	case "ws":
+		c, err = d.DialContext(ctx, "tcp", addr)
+	default:
+		return nil, fmt.Errorf("not a websocket URL: %s", raw)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return wsHandshake(c, u.Host, u.RequestURI(), "", peer, timeout)
+}
+
+func wsHandshake(c net.Conn, host, path, proto, peer string, timeout time.Duration) (*wsConn, error) {
 	kb := make([]byte, 16)
 	rand.Read(kb)
 	key := base64.StdEncoding.EncodeToString(kb)
 	c.SetDeadline(time.Now().Add(timeout))
-	fmt.Fprintf(c, "GET /ws HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
-		"Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: baldrick\r\n\r\n", host, key)
+	if proto != "" {
+		proto = "Sec-WebSocket-Protocol: " + proto + "\r\n"
+	}
+	fmt.Fprintf(c, "GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"+
+		"Sec-WebSocket-Key: %s\r\nSec-WebSocket-Version: 13\r\n%s\r\n", path, host, key, proto)
 	br := bufio.NewReader(c)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
@@ -52,7 +102,7 @@ func wsDial(host string, timeout time.Duration) (*wsConn, error) {
 		return nil, errors.New("websocket upgrade: bad accept key")
 	}
 	c.SetDeadline(time.Time{})
-	return &wsConn{c: c, br: br}, nil
+	return &wsConn{c: c, br: br, peer: peer}, nil
 }
 
 func (w *wsConn) Close() error { return w.c.Close() }
@@ -103,7 +153,11 @@ func (w *wsConn) read(timeout time.Duration) ([]byte, error) {
 		}
 		switch op {
 		case 0x8:
-			return nil, errors.New("closed by board")
+			e := &wsCloseError{Peer: w.peer}
+			if len(p) >= 2 {
+				e.Code = int(binary.BigEndian.Uint16(p))
+			}
+			return nil, e
 		case 0x9:
 			w.write(0xA, p)
 			continue
@@ -129,7 +183,8 @@ func (w *wsConn) write(op byte, p []byte) error {
 	case len(p) < 1<<16:
 		f = append(f, 0x80|126, byte(len(p)>>8), byte(len(p)))
 	default:
-		return errors.New("websocket payload too large")
+		f = append(f, 0x80|127)
+		f = binary.BigEndian.AppendUint64(f, uint64(len(p)))
 	}
 	var mask [4]byte
 	rand.Read(mask[:])

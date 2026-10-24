@@ -93,7 +93,8 @@ const showLeadTime = 5 * time.Minute
 var fppClient = &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{
 	DisableKeepAlives: true, DialContext: (&net.Dialer{Timeout: 2 * time.Second}).DialContext}}
 
-// fppGet fetches one FPP API document. Only GETs are ever sent to FPP.
+// fppGet fetches one FPP API document. Monitoring only ever reads; the
+// Discord commands go through fppControl.
 func fppGet(ctx context.Context, host, path string) ([]byte, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+path, nil)
 	resp, err := fppClient.Do(req)
