@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ type botBackend interface {
 	rebootBoard(ctx context.Context, name, by string) error
 	setMaintenance(name string, on bool, d time.Duration, note, by string) (*Maintenance, error)
 	ackAll(board, note, by string) int
+	ackIncident(id, note, by string) (Incident, error)
 
 	fpps() []FPPView
 	fppPlaylists(ctx context.Context, fpp string) ([]string, error)
@@ -176,6 +178,7 @@ const botHelp = "**Baldrick Monitor commands**\n" +
 	"`maint <board> [on|off] [3h] [note]`: maintenance mode; `maint` lists boards in it\n" +
 	"`ack [board|all] [note]`: acknowledge open incidents\n" +
 	"`incidents`: incidents still alerting\n" +
+	"Reply `ack` or `ack: <note>` to a monitor alert to acknowledge that incident.\n" +
 	"Reply `yes` or `no` to a question, or use its buttons. Slash commands work too."
 
 // botEngine runs commands against the monitor.
@@ -404,6 +407,45 @@ func (e *botEngine) run(ctx context.Context, user, by string, c botCmd) botReply
 		return txt(fmt.Sprintf("✅ Acknowledged %d incident(s) %s.", n, where))
 	}
 	return fail(fmt.Errorf("unknown command `%s`", c.Name))
+}
+
+var incidentIDRe = regexp.MustCompile(`\b\d{8}T\d{6}-[0-9a-f]{6}\b`)
+
+// ackReply reads a reply to a notice: "ack", "ack: power cycled it",
+// "acknowledged", "👍". ok is false for anything else.
+func ackReply(text string) (note string, ok bool) {
+	t := strings.TrimSpace(text)
+	lower := strings.ToLower(t)
+	for _, w := range []string{"acknowledged", "acknowledge", "ack", "👍", "✅"} {
+		if !strings.HasPrefix(lower, w) {
+			continue
+		}
+		rest := t[len(w):]
+		if rest != "" && w != "👍" && w != "✅" {
+			if r := rest[0]; r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+				return "", false // "acked", "ackbar": not the command word
+			}
+		}
+		return strings.TrimSpace(strings.TrimLeft(rest, " :,-–—.!")), true
+	}
+	return "", false
+}
+
+// ackIncidents acknowledges the incidents a notice was about.
+func (e *botEngine) ackIncidents(ids []string, note, by string) string {
+	if len(ids) == 0 {
+		return "That message isn't about an incident, so there's nothing to acknowledge."
+	}
+	var sb strings.Builder
+	for _, id := range ids {
+		inc, err := e.be.ackIncident(id, note, by)
+		if err != nil {
+			fmt.Fprintf(&sb, "⚠️ Incident %s: %v\n", id, err)
+			continue
+		}
+		fmt.Fprintf(&sb, "✅ Acknowledged **%s** %s (%s ago)%s\n", inc.Board, inc.Title, agoText(inc.StartedAt), noteSuffix(note))
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 var statusIcon = map[string]string{"up": "🟢", "degraded": "🟠", "down": "🔴", "maintenance": "🔧", "unknown": "⚪"}

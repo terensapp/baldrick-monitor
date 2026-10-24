@@ -303,6 +303,15 @@ names):
 | `incidents` | Incidents still alerting |
 | `help` | The list |
 
+**Acknowledging by reply.** Reply to a monitor alert with `ack`, `ack:
+power cycled it`, `acknowledged` or 👍 and the incident it's about is
+acknowledged, with the rest of the reply as the note; the bot answers to
+confirm. Alerts still go out through the Discord webhook (Notifications
+tab); each one names its incident in the footer, which is how the bot finds
+it, so the webhook has to post into the bot's channel. A summary from quiet
+hours lists all its incidents and a reply acknowledges them all. Any other
+reply to an alert is read as an ordinary command.
+
 Board and FPP names match case-insensitively or by a unique prefix
 (`reboot pixelt`). A question is answered with its buttons or by replying
 `yes` / `no`, only by whoever asked, within 2 minutes.

@@ -35,6 +35,17 @@ type Alert struct {
 	Held     []Alert   `json:"held,omitempty"` // digest: the alerts held during quiet hours
 }
 
+// incidentIDs are the incidents an alert (or a digest of them) is about.
+func (a Alert) incidentIDs() []string {
+	var ids []string
+	for _, x := range append([]Alert{a}, a.Held...) {
+		if x.Incident != "" && !slices.Contains(ids, x.Incident) {
+			ids = append(ids, x.Incident)
+		}
+	}
+	return ids
+}
+
 // AlertEvents are the events a channel can subscribe to.
 var AlertEvents = []string{"lockup", "reboot", "ddp", "show", "memory", "recovered", "fpp_unreachable", "show_started", "show_stopped", "update"}
 
@@ -246,6 +257,12 @@ func (n *Notifier) deliver(ch Channel, a Alert) error {
 		}
 		if a.Host != "" {
 			embed["fields"] = []map[string]any{{"name": "Board", "value": a.Board, "inline": true}, {"name": "Address", "value": a.Host, "inline": true}}
+		}
+		// The bot finds the incident here when someone replies "ack".
+		if ids := a.incidentIDs(); len(ids) == 1 {
+			embed["footer"] = map[string]string{"text": "Incident " + ids[0] + " · reply \"ack\" to acknowledge"}
+		} else if len(ids) > 1 {
+			embed["footer"] = map[string]string{"text": clip("Incidents " + strings.Join(ids, " ") + " · reply \"ack\" to acknowledge them")}
 		}
 		body, _ = json.Marshal(map[string]any{"username": "Baldrick Monitor", "embeds": []any{embed}})
 	case "slack":

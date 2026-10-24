@@ -402,6 +402,34 @@ type dMessage struct {
 	ChannelID string `json:"channel_id"`
 	Content   string `json:"content"`
 	Author    dUser  `json:"author"`
+	Embeds    []struct {
+		URL    string `json:"url"`
+		Footer *struct {
+			Text string `json:"text"`
+		} `json:"footer"`
+	} `json:"embeds"`
+	Reference *struct {
+		MessageID string `json:"message_id"`
+	} `json:"message_reference"`
+	Replied *dMessage `json:"referenced_message"`
+}
+
+// incidentIDs finds the incidents a monitor notice is about (its embed
+// footer, or the dashboard link).
+func (m *dMessage) incidentIDs() []string {
+	var ids []string
+	for _, e := range m.Embeds {
+		s := e.URL
+		if e.Footer != nil {
+			s += " " + e.Footer.Text
+		}
+		for _, id := range incidentIDRe.FindAllString(s, -1) {
+			if !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
 }
 
 type dOption struct {
@@ -528,6 +556,22 @@ func (d *DiscordBot) onMessage(ctx context.Context, m dMessage) {
 	if !cfg.allowed(m.Author.ID) {
 		log.Printf("discord: ignored a message from user %s (%s), who isn't allowed", m.Author.ID, m.Author.Username)
 		return
+	}
+	if m.Reference != nil && m.Reference.MessageID != "" {
+		if note, ok := ackReply(text); ok {
+			replied := m.Replied
+			if replied == nil { // Discord leaves it out at times; ask for it
+				var got dMessage
+				if err := d.rest(ctx, http.MethodGet, "/channels/"+m.ChannelID+"/messages/"+m.Reference.MessageID, nil, &got); err != nil {
+					d.postReply(ctx, m, botReply{Text: "⚠️ Couldn't read the message you replied to: " + err.Error()})
+					return
+				}
+				replied = &got
+			}
+			log.Printf("discord: %s acknowledged by reply", m.Author.Username)
+			d.postReply(ctx, m, botReply{Text: d.eng.ackIncidents(replied.incidentIDs(), note, m.Author.by())})
+			return
+		}
 	}
 	if out, ok := d.eng.answer(ctx, m.Author.ID, text); ok {
 		d.postReply(ctx, m, botReply{Text: out})

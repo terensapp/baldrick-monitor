@@ -32,6 +32,7 @@ type fakeBackend struct {
 	stopped   []string
 	maint     map[string]bool
 	acked     int
+	ackedIDs  []string
 	rebootErr error
 }
 
@@ -84,6 +85,16 @@ func (f *fakeBackend) ackAll(board, note, by string) int {
 	f.acked++
 	return 3
 }
+func (f *fakeBackend) ackIncident(id, note, by string) (Incident, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !strings.HasPrefix(id, "2026") {
+		return Incident{}, errNoIncident
+	}
+	f.ackedIDs = append(f.ackedIDs, id+"|"+note+"|"+by)
+	return Incident{ID: id, Board: "pixel2", Title: "Stopped responding", StartedAt: time.Now().Add(-time.Minute)}, nil
+}
+
 func (f *fakeBackend) fpps() []FPPView {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -171,6 +182,25 @@ func TestParseBotText(t *testing.T) {
 		if _, err := parseBotText(bad); err == nil {
 			t.Errorf("%q: expected an error", bad)
 		}
+	}
+}
+
+func TestAckReply(t *testing.T) {
+	cases := map[string]string{"ack": "", "ACK: power cycled it": "power cycled it", "ack - swapped the PSU": "swapped the PSU",
+		"acknowledged": "", "Acknowledge, on it": "on it", "👍": "", "✅ done": "done"}
+	for in, want := range cases {
+		if note, ok := ackReply(in); !ok || note != want {
+			t.Errorf("%q: got %q %v, want %q", in, note, ok, want)
+		}
+	}
+	for _, in := range []string{"acked", "reboot pixel1", "status", "ackbar"} {
+		if _, ok := ackReply(in); ok {
+			t.Errorf("%q read as an ack", in)
+		}
+	}
+	a := Alert{Event: "digest", Held: []Alert{{Incident: "a"}, {Incident: "b"}, {Incident: "a"}, {}}}
+	if ids := a.incidentIDs(); strings.Join(ids, ",") != "a,b" {
+		t.Errorf("digest ids %v", ids)
 	}
 }
 
@@ -515,6 +545,10 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		call := restCall{Method: r.Method, Path: strings.TrimPrefix(r.URL.Path, "/api"), Raw: string(b)}
 		json.Unmarshal(b, &call.Body)
 		f.rest <- call
+		if strings.Contains(call.Path, "/messages/") && r.Method == http.MethodGet {
+			w.Write([]byte(`{"id":"n2","embeds":[{"title":"x","footer":{"text":"Incident 20261024T190000-abcdef · reply \"ack\" to acknowledge"}}]}`))
+			return
+		}
 		if strings.HasPrefix(call.Path, "/channels/") && r.Method == http.MethodGet {
 			w.Write([]byte(`{"id":"100","guild_id":"200"}`))
 			return
@@ -719,6 +753,41 @@ func TestDiscordBotEndToEnd(t *testing.T) {
 	be.mu.Lock()
 	if len(be.stopped) != 1 || be.stopped[0] != "fpp-main now" {
 		t.Fatalf("stopped %v", be.stopped)
+	}
+	be.mu.Unlock()
+
+	// Replying "ack: …" to a monitor notice acknowledges its incident.
+	notice := map[string]any{"id": "n1", "channel_id": "100", "author": map[string]any{"id": "500", "bot": true},
+		"embeds": []any{map[string]any{"title": "pixel2: Stopped responding", "url": "http://dash/#incident=20261024T180000-0a1b2c",
+			"footer": map[string]any{"text": "Incident 20261024T180000-0a1b2c · reply \"ack\" to acknowledge"}}}}
+	reply := func(seq int, user, text string, replied any) map[string]any {
+		d := map[string]any{"id": "r" + user, "channel_id": "100", "content": text, "author": map[string]any{"id": user, "username": "user" + user},
+			"message_reference": map[string]any{"message_id": "n1"}, "referenced_message": replied}
+		return dispatchEv(seq, "MESSAGE_CREATE", d)
+	}
+	g.send(t, reply(13, "8", "ack", notice)) // a stranger: ignored
+	time.Sleep(50 * time.Millisecond)
+	g.send(t, reply(14, "7", "ack: power cycled it", notice))
+	if c = f.next(); c.Method != "POST" || !strings.Contains(c.Body["content"].(string), "Acknowledged **pixel2** Stopped responding") ||
+		!strings.Contains(c.Raw, `"message_id":"r7"`) {
+		t.Fatalf("ack reply: %+v", c)
+	}
+	// Without referenced_message the bot fetches the notice.
+	g.send(t, reply(15, "7", "👍", nil))
+	if c = f.next(); c.Method != "GET" || c.Path != "/channels/100/messages/n1" {
+		t.Fatalf("fetch: %+v", c)
+	}
+	if c = f.next(); !strings.Contains(c.Body["content"].(string), "Acknowledged") {
+		t.Fatalf("ack after fetch: %+v", c)
+	}
+	// A reply to something that isn't an incident notice says so.
+	g.send(t, reply(16, "7", "ack", map[string]any{"id": "n3", "content": "hello", "author": map[string]any{"id": "7"}}))
+	if c = f.next(); !strings.Contains(c.Body["content"].(string), "isn't about an incident") {
+		t.Fatalf("non-incident: %+v", c)
+	}
+	be.mu.Lock()
+	if strings.Join(be.ackedIDs, "\n") != "20261024T180000-0a1b2c|power cycled it|Discord @user7\n20261024T190000-abcdef||Discord @user7" || be.acked != 0 {
+		t.Fatalf("acked %v (ack-all %d)", be.ackedIDs, be.acked)
 	}
 	be.mu.Unlock()
 

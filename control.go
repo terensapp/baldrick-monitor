@@ -156,6 +156,15 @@ func (m monitorBackend) ackAll(board, note, by string) int {
 	return n
 }
 
+func (m monitorBackend) ackIncident(id, note, by string) (Incident, error) {
+	for _, b := range m.reg.List() {
+		if _, ok := b.Incident(id); ok {
+			return b.SetAck(id, &Ack{At: time.Now(), Note: strings.TrimSpace(note), By: by})
+		}
+	}
+	return Incident{}, errNoIncident
+}
+
 func (m monitorBackend) fpps() []FPPView { return m.fppr.Views() }
 
 func (m monitorBackend) fppCall(ctx context.Context, fpp, method, path string, body any) ([]byte, error) {

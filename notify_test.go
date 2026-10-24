@@ -119,6 +119,9 @@ func TestWebhookPayloads(t *testing.T) {
 	if embed["title"] != a.Title || embed["url"] != "http://dash/#incident=abc" || embed["color"].(float64) != 0xdc2626 {
 		t.Errorf("discord embed: %+v", embed)
 	}
+	if f, _ := embed["footer"].(map[string]any); f == nil || !strings.HasPrefix(f["text"].(string), "Incident abc ·") {
+		t.Errorf("discord footer should carry the incident for reply-to-ack: %+v", embed["footer"])
+	}
 	if !strings.Contains(got["slack"]["text"].(string), "HTTP 503") || len(got["slack"]["blocks"].([]any)) != 2 {
 		t.Errorf("slack payload: %+v", got["slack"])
 	}
