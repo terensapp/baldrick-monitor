@@ -510,6 +510,9 @@ type fakeDiscord struct {
 	srv   *httptest.Server
 	rest  chan restCall
 	conns chan *fakeGW
+
+	mu  sync.Mutex
+	all []net.Conn // kept reachable: a collected conn gets closed by its finalizer
 }
 
 type restCall struct {
@@ -535,6 +538,9 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		brw.WriteString("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " +
 			base64.StdEncoding.EncodeToString(h[:]) + "\r\n\r\n")
 		brw.Flush()
+		f.mu.Lock()
+		f.all = append(f.all, c)
+		f.mu.Unlock()
 		f.conns <- &fakeGW{c: c, br: brw.Reader}
 	})
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -556,7 +562,14 @@ func newFakeDiscord(t *testing.T) *fakeDiscord {
 		w.Write([]byte(`{"id":"1"}`))
 	})
 	f.srv = httptest.NewServer(mux)
-	t.Cleanup(f.srv.Close)
+	t.Cleanup(func() {
+		f.srv.Close()
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		for _, c := range f.all {
+			c.Close()
+		}
+	})
 	return f
 }
 

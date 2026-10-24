@@ -174,6 +174,12 @@ func (d *DiscordBot) Run(ctx context.Context) {
 		}
 	}
 	for ctx.Err() == nil {
+		// The config is read fresh below, so a restart signalled before now
+		// is already covered; left queued, it would cancel the new session.
+		select {
+		case <-d.restart:
+		default:
+		}
 		cfg := d.config()
 		if !cfg.Enabled || cfg.Token == "" {
 			d.setState("off", "")
